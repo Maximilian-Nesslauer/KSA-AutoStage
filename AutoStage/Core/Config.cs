@@ -43,6 +43,16 @@ static class Config
         _dirtyVehicles.Clear();
     }
 
+    private static void SetDefaults()
+    {
+        EngineDelays["CorePropulsionA_Prefab_EngineA1_Dev"] = 2.0;
+        EngineDelays["CorePropulsionA_Prefab_EngineA2"] = 2.0;
+        EngineDelays["CorePropulsionA_Prefab_EngineA3"] = 3.0;
+        EngineDelays["CorePropulsionA_Prefab_EngineA4"] = 1.5;
+        EngineDelays["CorePropulsionA_Prefab_EngineA5"] = 3.0;
+        EngineDelays["CorePropulsionA_Prefab_EngineA6"] = 3.0;
+    }
+
     #region TOML Parsing
 
     /// <summary>
@@ -113,6 +123,7 @@ static class Config
 
         if (!File.Exists(_configPath))
         {
+            SetDefaults();
             SaveGlobalConfig();
             return;
         }
