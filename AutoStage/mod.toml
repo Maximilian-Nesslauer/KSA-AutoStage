@@ -1,0 +1,9 @@
+name = "AutoStage"
+patches = [ "Patches/BurnControlPatch.xml" ]
+
+[StarMap]
+EntryAssembly = "AutoStage"
+
+[[StarMap.ModDependencies]]
+ModId = "KittenExtensions"
+Optional = false
