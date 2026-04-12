@@ -25,6 +25,14 @@
       <HintPath>..\..\..\refs\game\Brutal.Core.Logging.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Brutal.ImGui">
+      <HintPath>..\..\..\refs\game\Brutal.ImGui.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Strings">
+      <HintPath>..\..\..\refs\game\Brutal.Core.Strings.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

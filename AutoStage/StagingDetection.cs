@@ -11,7 +11,10 @@ namespace AutoStage;
 /// to detect propellant depletion and trigger staging.
 ///
 /// State machine:
-///   Monitoring -> all active engines lose propellant -> stage, enter AwaitingPropagation
+///   Monitoring -> all active engines lose propellant -> stage
+///     If delay > 0:  enter AwaitingIgnition (decoupler fired, engines pending)
+///     If delay == 0: enter AwaitingPropagation (everything activated)
+///   AwaitingIgnition -> delay elapsed -> activate engines, enter AwaitingPropagation
 ///   AwaitingPropagation -> new engines get propellant -> back to Monitoring
 ///   AwaitingPropagation -> still dry after propagation delay -> cascade stage
 ///
@@ -22,17 +25,18 @@ namespace AutoStage;
 /// </summary>
 static class StagingDetectionPatch
 {
-    enum State { Monitoring, AwaitingPropagation }
+    enum State { Monitoring, AwaitingIgnition, AwaitingPropagation }
 
     private static State _state = State.Monitoring;
     private static int _propagationFrames;
     private static FlightComputerBurnMode _triggeredMode;
+    private static PendingIgnition? _pendingIgnition;
 
     // 1 frame for worker thread to process new engines, +1 margin.
     private const int PropagationDelay = 2;
 
-    internal static void Prefix(Vehicle __instance,
-        out (FlightComputerBurnMode mode, bool hadPropellant) __state)
+    internal static void Prefix(Vehicle __instance, SimStep simStep,
+        out (FlightComputerBurnMode mode, bool hadPropellant, double deltaTime) __state)
     {
         if (__instance != Program.ControlledVehicle || !Mod.AutoStageEnabled)
         {
@@ -41,12 +45,13 @@ static class StagingDetectionPatch
         }
         __state = (
             __instance.FlightComputer.BurnMode,
-            StagingHelpers.HasActiveEngineWithPropellant(__instance)
+            StagingHelpers.HasActiveEngineWithPropellant(__instance),
+            simStep.DeltaTime
         );
     }
 
     internal static void Postfix(Vehicle __instance,
-        (FlightComputerBurnMode mode, bool hadPropellant) __state)
+        (FlightComputerBurnMode mode, bool hadPropellant, double deltaTime) __state)
     {
 #if DEBUG
         long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
@@ -65,6 +70,26 @@ static class StagingDetectionPatch
                     && StagingHelpers.HasNextEngineSequence(__instance))
                 {
                     ExecuteStaging(__instance, fc, __state.mode);
+                }
+                break;
+
+            case State.AwaitingIgnition:
+                MaintainBurnMode(fc);
+                if (_pendingIgnition != null)
+                {
+                    _pendingIgnition.RemainingDelay -= __state.deltaTime;
+                    if (_pendingIgnition.RemainingDelay <= 0.0)
+                    {
+                        StagingExecution.ActivatePendingEngines(_pendingIgnition);
+                        _pendingIgnition = null;
+                        _state = State.AwaitingPropagation;
+                        _propagationFrames = 0;
+                    }
+                }
+                else
+                {
+                    // Should not happen, but recover gracefully
+                    _state = State.Monitoring;
                 }
                 break;
 
@@ -106,14 +131,26 @@ static class StagingDetectionPatch
                 $"[AutoStage] Staging ({originalBurnMode} mode): {dvInfo}");
         }
 
-        vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
-
         _triggeredMode = originalBurnMode;
+
+        PendingIgnition? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
+
         if (originalBurnMode == FlightComputerBurnMode.Auto && fc.Burn != null)
             fc.BurnMode = FlightComputerBurnMode.Auto;
 
-        _state = State.AwaitingPropagation;
-        _propagationFrames = 0;
+        if (pending != null)
+        {
+            _pendingIgnition = pending;
+            _state = State.AwaitingIgnition;
+            DefaultCategory.Log.Info(
+                $"[AutoStage] Ignition delay: {pending.RemainingDelay:F1}s for " +
+                $"{pending.EngineParts.Count} engine(s)");
+        }
+        else
+        {
+            _state = State.AwaitingPropagation;
+            _propagationFrames = 0;
+        }
     }
 
     /// <summary>
@@ -146,5 +183,6 @@ static class StagingDetectionPatch
         _state = State.Monitoring;
         _propagationFrames = 0;
         _triggeredMode = FlightComputerBurnMode.Manual;
+        _pendingIgnition = null;
     }
 }

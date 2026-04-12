@@ -13,6 +13,31 @@ Validated against KSA build version 2026.4.10.4057.
 - **AUTOSTAGE toggle button** on the BurnControl gauge panel
 - **Auto-burn continuation** - maintains BurnMode=Auto through staging so planned burns don't abort
 - **Cascade staging** - stages again if the next stage is also empty
+- **Ignition delay** - configurable delay between decoupler separation and engine ignition, simulating realistic engine spool-up time. Decouplers fire immediately, engines ignite after the configured delay.
+
+## Ignition Delay
+
+After staging, decouplers fire immediately but engines wait a configurable delay before igniting.
+
+### Configuration
+
+**Settings window (Settings > Mods > AutoStage Settings):** Configure the ignition delay per engine variant. All known engine variants are listed with an input field for the delay in seconds. Click "Save" to persist changes.
+
+**Part Window (right-click engine > Window):** Override the delay for a specific sequence on the current vehicle. This per-vehicle override takes priority over the global engine config.
+
+### Config files
+
+Global config is stored in `Documents\My Games\Kitten Space Agency\mods\AutoStage\autostage.toml`:
+
+```toml
+[engine_delays]
+CorePropulsionA_Prefab_EngineA2 = 2.0
+CorePropulsionA_Prefab_EngineA3 = 5.0
+```
+
+Per-vehicle sequence overrides are stored in `Documents\My Games\Kitten Space Agency\mods\AutoStage\vehicles\<vehicle-id>.toml`. These files are created automatically when you set an override in the Part Window.
+
+Removing the mod does not affect / corrupt game saves.
 
 ## Installation
 

@@ -14,6 +14,7 @@ public class Mod
     private const string TestedGameVersion = "v2026.4.10.4057";
 
     public static bool AutoStageEnabled;
+    public static bool IgnitionDelayAvailable;
 
     /// <summary>
     /// Injects our enum into the gauge button lookup before the game processes
@@ -38,9 +39,12 @@ public class Mod
                 $"[AutoStage] Tested against {TestedGameVersion}, current is {gameVersion}. " +
                 "Some features may not work correctly.");
 
+        Config.Init();
+
         _harmony = new Harmony("com.maxi.autostage");
 
-        if (GameReflection.ValidateAll())
+        bool coreOk = GameReflection.ValidateAll();
+        if (coreOk)
         {
             _harmony.CreateClassProcessor(typeof(Patch_ToggleEnum)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_IsSet)).Patch();
@@ -50,11 +54,27 @@ public class Mod
                 postfix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Postfix)));
 
             if (DebugConfig.AutoStage)
-                DefaultCategory.Log.Debug("[AutoStage] All patches applied.");
+                DefaultCategory.Log.Debug("[AutoStage] Core patches applied.");
         }
         else
         {
             DefaultCategory.Log.Warning("[AutoStage] Disabled - reflection targets not found.");
+        }
+
+        if (coreOk && GameReflection.ValidateIgnitionDelay())
+        {
+            IgnitionDelayAvailable = true;
+            _harmony.CreateClassProcessor(typeof(PartWindowPatch)).Patch();
+            _harmony.CreateClassProcessor(typeof(SettingsTabPatch)).Patch();
+
+            if (DebugConfig.IgnitionDelay)
+                DefaultCategory.Log.Debug("[AutoStage] IgnitionDelay patches applied.");
+        }
+        else if (coreOk)
+        {
+            IgnitionDelayAvailable = false;
+            DefaultCategory.Log.Warning(
+                "[AutoStage] IgnitionDelay disabled - reflection targets not found.");
         }
 
         DefaultCategory.Log.Info("[AutoStage] Loaded.");
@@ -66,7 +86,10 @@ public class Mod
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
         AutoStageEnabled = false;
+        IgnitionDelayAvailable = false;
         StagingDetectionPatch.Reset();
+        SettingsTabPatch.Reset();
+        Config.Reset();
 #if DEBUG
         PerfTracker.Reset();
 #endif
