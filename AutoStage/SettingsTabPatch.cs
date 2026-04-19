@@ -132,7 +132,7 @@ static class SettingsTabPatch
         if (ImGui.Button("Save"u8, (float2?)null))
         {
             Config.SaveGlobalConfig();
-            Alert.Create("AutoStage config saved", Color.Green, 2.0);
+            TimedAlert.Create("AutoStage config saved", Color.Green, 2.0);
         }
 
         ImGui.Unindent();

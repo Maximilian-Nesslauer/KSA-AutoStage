@@ -57,7 +57,7 @@ static class StagingExecution
             return null;
         }
         GameReflection.SequenceList_ActiveSequence.SetValue(seqList, seqNumber);
-        Alert.Create($"Sequence {seqNumber} activated", Color.Yellow, 3.0);
+        TimedAlert.Create($"Sequence {seqNumber} activated", Color.Yellow, 3.0);
 
         // Guard against re-entrant ResetCaches during part activation (same as stock)
         GameReflection.SequenceList_updatingSequence?.SetValue(seqList, true);
