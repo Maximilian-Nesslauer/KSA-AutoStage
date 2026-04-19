@@ -4,6 +4,17 @@ Automatic staging for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-
 
 Activates the next sequence whenever active engines run out of propellant. Works during auto-burns (continues the burn instead of aborting) and manual burns.
 
+<table>
+  <tr>
+    <th align="center">Stock</th>
+    <th align="center">With AutoStage</th>
+  </tr>
+  <tr valign="top">
+    <td><img src="images/stock.png" alt="Stock BurnControl panel" width="420" /></td>
+    <td><img src="images/autostage.png" alt="BurnControl panel with AUTOSTAGE toggle" width="420" /></td>
+  </tr>
+</table>
+
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
 Validated against KSA build version 2026.4.15.4141.
