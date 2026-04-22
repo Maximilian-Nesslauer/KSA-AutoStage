@@ -65,6 +65,28 @@ enabled = true
 
 ## Dependencies
 
-- [StarMap.API](https://github.com/StarMapLoader/StarMap) (NuGet)
-- [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) (NuGet)
-- [KittenExtensions](https://github.com/tsholmes/KittenExtensions) (for XML patching)
+| Package | Purpose | Tested version |
+| --- | --- | --- |
+| [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, required at runtime (see [Installation](#installation)) | 0.4.5 |
+| [KittenExtensions](https://github.com/tsholmes/KittenExtensions) | Required at runtime for XML patching | v0.4.0 |
+
+## Build dependencies
+
+Required only to build the mod from source. Targets **.NET 10**.
+
+| Package | Source | Tested Version |
+| --- | --- | --- |
+| [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
+| [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
+
+## Mod compatibility
+
+- Known conflicts: none
+
+## Community
+
+Thread on the KSA forums: https://forums.ahwoo.com/threads/autostage.891/
+
+## Check out my other mods
+
+- [StageInfo](https://github.com/Maximilian-Nesslauer/KSA-StageInfo) - per-stage dV, TWR and burn time readouts in the stage info panel ([forum thread](https://forums.ahwoo.com/threads/stageinfo.905/))
