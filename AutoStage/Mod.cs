@@ -11,7 +11,7 @@ public class Mod
 {
     private static Harmony? _harmony;
 
-    private const string TestedGameVersion = "v2026.4.16.4170";
+    private const string TestedGameVersion = "v2026.4.17.4184";
 
     public static bool AutoStageEnabled;
     public static bool IgnitionDelayAvailable;
