@@ -85,6 +85,8 @@ static class StagingExecution
         GameReflection.SequenceList_updatingSequence?.SetValue(seqList, false);
         seqList.ResetCaches();
 
+        vehicle.UpdateAfterPartTreeModification();
+
         if (pendingEngines == null || pendingEngines.Count == 0)
             return null;
 
@@ -121,6 +123,8 @@ static class StagingExecution
                 $"[AutoStage] Ignited {activated}/{pending.EngineParts.Count} engines");
 
         pending.Vehicle.Parts.SequenceList.ResetCaches();
+
+        pending.Vehicle.UpdateAfterPartTreeModification();
     }
 }
 

@@ -99,6 +99,7 @@ static class StagingDetectionPatch
 
                 if (hasPropellant)
                 {
+                    __instance.UpdateAfterPartTreeModification();
                     _state = State.Monitoring;
                 }
                 else if (_propagationFrames >= PropagationDelay)
