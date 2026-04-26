@@ -11,17 +11,18 @@ namespace AutoStage;
 /// to detect propellant depletion and trigger staging.
 ///
 /// State machine:
-///   Monitoring -> all active engines lose propellant -> stage
-///     If delay > 0:  enter AwaitingIgnition (decoupler fired, engines pending)
-///     If delay == 0: enter AwaitingPropagation (everything activated)
-///   AwaitingIgnition -> delay elapsed -> activate engines, enter AwaitingPropagation
+///   Monitoring -> active engines lose propellant -> stage
+///     AwaitingIgnition:   one or both of (decoupler delay, engine delay) still running.
+///                         Tick both timers independently, fire parts when they hit 0.
+///     AwaitingPropagation: all pending parts fired; wait for worker to reflect
+///                          the new propellant state. If it stays dry, cascade stage.
 ///   AwaitingPropagation -> new engines get propellant -> back to Monitoring
 ///   AwaitingPropagation -> still dry after propagation delay -> cascade stage
 ///
-/// AwaitingPropagation is needed because newly activated engines have
-/// IsPropellantAvailable=false until the worker thread processes them (1 frame).
-/// During this time we also force BurnMode=Auto to prevent the worker from
-/// aborting the burn.
+/// AwaitingPropagation is needed because IsPropellantAvailable on the new
+/// engines is computed by the worker thread and only flips one tick after
+/// activation. During that window we force BurnMode=Auto to stop the worker
+/// from aborting the burn.
 /// </summary>
 static class StagingDetectionPatch
 {
@@ -30,7 +31,7 @@ static class StagingDetectionPatch
     private static State _state = State.Monitoring;
     private static int _propagationFrames;
     private static FlightComputerBurnMode _triggeredMode;
-    private static PendingIgnition? _pendingIgnition;
+    private static PendingStaging? _pendingStaging;
 
     // 1 frame for worker thread to process new engines, +1 margin.
     private const int PropagationDelay = 2;
@@ -75,22 +76,7 @@ static class StagingDetectionPatch
 
             case State.AwaitingIgnition:
                 MaintainBurnMode(fc);
-                if (_pendingIgnition != null)
-                {
-                    _pendingIgnition.RemainingDelay -= __state.deltaTime;
-                    if (_pendingIgnition.RemainingDelay <= 0.0)
-                    {
-                        StagingExecution.ActivatePendingEngines(_pendingIgnition);
-                        _pendingIgnition = null;
-                        _state = State.AwaitingPropagation;
-                        _propagationFrames = 0;
-                    }
-                }
-                else
-                {
-                    // Should not happen, but recover gracefully
-                    _state = State.Monitoring;
-                }
+                TickPendingStaging(__instance, __state.deltaTime);
                 break;
 
             case State.AwaitingPropagation:
@@ -99,7 +85,6 @@ static class StagingDetectionPatch
 
                 if (hasPropellant)
                 {
-                    __instance.UpdateAfterPartTreeModification();
                     _state = State.Monitoring;
                 }
                 else if (_propagationFrames >= PropagationDelay)
@@ -120,6 +105,44 @@ static class StagingDetectionPatch
 #endif
     }
 
+    private static void TickPendingStaging(Vehicle vehicle, double deltaTime)
+    {
+        PendingStaging? p = _pendingStaging;
+        if (p == null)
+        {
+            // Should not happen, but recover
+            _state = State.Monitoring;
+            return;
+        }
+
+        if (p.DecouplersPending)
+        {
+            p.DecouplerRemaining -= deltaTime;
+            if (p.DecouplerRemaining <= 0.0)
+            {
+                StagingExecution.ActivatePendingParts(vehicle, p.DecouplerParts!, "decoupler");
+                p.ClearDecouplers();
+            }
+        }
+
+        if (p.EnginesPending)
+        {
+            p.EngineRemaining -= deltaTime;
+            if (p.EngineRemaining <= 0.0)
+            {
+                StagingExecution.ActivatePendingParts(vehicle, p.EngineParts!, "engine");
+                p.ClearEngines();
+            }
+        }
+
+        if (!p.AnyPending)
+        {
+            _pendingStaging = null;
+            _state = State.AwaitingPropagation;
+            _propagationFrames = 0;
+        }
+    }
+
     private static void ExecuteStaging(Vehicle vehicle, FlightComputer fc,
         FlightComputerBurnMode originalBurnMode)
     {
@@ -134,18 +157,30 @@ static class StagingDetectionPatch
 
         _triggeredMode = originalBurnMode;
 
-        PendingIgnition? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
+        PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
 
         if (originalBurnMode == FlightComputerBurnMode.Auto && fc.Burn != null)
             fc.BurnMode = FlightComputerBurnMode.Auto;
 
         if (pending != null)
         {
-            _pendingIgnition = pending;
+            _pendingStaging = pending;
             _state = State.AwaitingIgnition;
+
+            if (pending.DecouplersPending && pending.DecouplerRemaining > 0.0)
+                TimedAlert.Create(
+                    $"Decouple in {pending.DecouplerRemaining:F1}s",
+                    Color.Yellow, pending.DecouplerRemaining);
+            if (pending.EnginesPending && pending.EngineRemaining > 0.0)
+                TimedAlert.Create(
+                    $"Ignition in {pending.EngineRemaining:F1}s",
+                    Color.Yellow, pending.EngineRemaining);
+
             DefaultCategory.Log.Info(
-                $"[AutoStage] Ignition delay: {pending.RemainingDelay:F1}s for " +
-                $"{pending.EngineParts.Count} engine(s)");
+                $"[AutoStage] Staging delay: decouplers={pending.DecouplerRemaining:F1}s " +
+                $"({pending.DecouplerParts?.Count ?? 0}), " +
+                $"engines={pending.EngineRemaining:F1}s " +
+                $"({pending.EngineParts?.Count ?? 0})");
         }
         else
         {
@@ -155,15 +190,21 @@ static class StagingDetectionPatch
     }
 
     /// <summary>
-    /// The worker thread keeps setting BurnMode=Manual because it sees
-    /// IsPropellantAvailable=false on the newly activated engines.
-    /// Override it back to Auto so the burn continues.
+    /// Keep the burn on auto while the worker thread thinks we're out of
+    /// propellant. FlightComputer.UpdateBurnTarget forces BurnMode=Manual
+    /// whenever HasAnyPropellant is false on the new engines.
+    ///
+    /// The override runs in the main-thread postfix, right after
+    /// UpdateFromTaskResults installed the worker's new FlightComputer.
+    /// The next worker task copies this FC, so its next ComputeControl
+    /// starts from Auto again. Manual wins within a single worker pass
+    /// (where HasAnyPropellant is false), Auto wins at the transition.
     /// </summary>
     private static void MaintainBurnMode(FlightComputer fc)
     {
         if (_triggeredMode == FlightComputerBurnMode.Auto
             && fc.Burn != null
-            && IsBurnIncomplete(fc)
+            && !IsBurnComplete(fc)
             && fc.BurnMode == FlightComputerBurnMode.Manual)
         {
             fc.BurnMode = FlightComputerBurnMode.Auto;
@@ -175,15 +216,11 @@ static class StagingDetectionPatch
         => fc.Burn != null
            && float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci) <= 0f;
 
-    private static bool IsBurnIncomplete(FlightComputer fc)
-        => fc.Burn != null
-           && float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci) > 0f;
-
     internal static void Reset()
     {
         _state = State.Monitoring;
         _propagationFrames = 0;
         _triggeredMode = FlightComputerBurnMode.Manual;
-        _pendingIgnition = null;
+        _pendingStaging = null;
     }
 }

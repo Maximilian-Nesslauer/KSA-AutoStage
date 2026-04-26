@@ -90,31 +90,51 @@ public class Mod
         StagingDetectionPatch.Reset();
         SettingsTabPatch.Reset();
         Config.Reset();
+        LogHelper.Reset();
+        RemoveEnumLookup();
 #if DEBUG
         PerfTracker.Reset();
 #endif
         DefaultCategory.Log.Info("[AutoStage] Unloaded.");
     }
 
+    private const string EnumLookupKey = "AutoStageToggle";
+
     private static void InjectEnumLookup()
     {
+        if (!TryGetEnumLookup(out var dict))
+            return;
+
+        dict[EnumLookupKey] = typeof(AutoStageToggle);
+
+        if (DebugConfig.AutoStage)
+            DefaultCategory.Log.Debug(
+                $"[AutoStage] Injected {EnumLookupKey} into _enumLookup ({dict.Count} entries).");
+    }
+
+    private static void RemoveEnumLookup()
+    {
+        if (!TryGetEnumLookup(out var dict))
+            return;
+
+        dict.Remove(EnumLookupKey);
+    }
+
+    private static bool TryGetEnumLookup(out Dictionary<string, Type> dict)
+    {
+        dict = null!;
         if (GameReflection.GaugeButton_enumLookup == null)
         {
             DefaultCategory.Log.Error(
                 "[AutoStage] GaugeButtonFlightComputer._enumLookup not found.");
-            return;
+            return false;
         }
-
-        if (GameReflection.GaugeButton_enumLookup.GetValue(null) is not Dictionary<string, Type> dict)
+        if (GameReflection.GaugeButton_enumLookup.GetValue(null) is not Dictionary<string, Type> found)
         {
             DefaultCategory.Log.Error("[AutoStage] _enumLookup is null or unexpected type.");
-            return;
+            return false;
         }
-
-        dict["AutoStageToggle"] = typeof(AutoStageToggle);
-
-        if (DebugConfig.AutoStage)
-            DefaultCategory.Log.Debug(
-                $"[AutoStage] Injected AutoStageToggle into _enumLookup ({dict.Count} entries).");
+        dict = found;
+        return true;
     }
 }

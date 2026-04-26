@@ -8,19 +8,22 @@ using KSA;
 namespace AutoStage;
 
 /// <summary>
-/// Replaces the stock ActivateNextSequence with a two-phase activation:
-/// Phase 1 (immediate): Decouplers, fairings, and other non-engine parts activate.
-/// Phase 2 (after delay): Engine parts activate.
+/// Replaces the stock ActivateNextSequence with a split activation that can
+/// defer decouplers and engines independently.
 ///
-/// If delay is 0, both phases execute in the same frame (stock behavior).
+/// Parts go into one of three buckets:
+///   - activate now: non-engine non-decoupler parts, and parts whose only
+///     engine/decoupler is already active (no work to do).
+///   - pending decouplers: decoupler parts, if decouplerDelay > 0.
+///   - pending engines: engine parts (with any inactive engine), if engineDelay > 0.
+///
+/// Decoupler and engine delays are both measured from the staging trigger,
+/// so they run independently. If a part has both modules (atypical), the
+/// engine delay wins.
 /// </summary>
 static class StagingExecution
 {
-    /// <summary>
-    /// Activates the next sequence with split timing. Returns the pending engine
-    /// parts and computed delay, or null if everything was activated immediately.
-    /// </summary>
-    public static PendingIgnition? ActivateNextSequenceSplit(Vehicle vehicle)
+    public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle)
     {
         SequenceList seqList = vehicle.Parts.SequenceList;
         ReadOnlySpan<Sequence> sequences = seqList.Sequences;
@@ -46,7 +49,8 @@ static class StagingExecution
             return null;
 
         int seqNumber = target.Number;
-        double delay = Config.GetSequenceDelay(vehicle, seqNumber);
+        double engineDelay = Config.GetSequenceEngineDelay(vehicle, seqNumber);
+        double decouplerDelay = Config.GetSequenceDecouplerDelay(vehicle, seqNumber);
 
         // Update ActiveSequence via reflection (private setter)
         if (GameReflection.SequenceList_ActiveSequence == null)
@@ -63,18 +67,26 @@ static class StagingExecution
         GameReflection.SequenceList_updatingSequence?.SetValue(seqList, true);
         target.Activated = true;
 
-        // Split parts into engines and non-engines
         ReadOnlySpan<Part> parts = target.Parts;
         List<Part>? pendingEngines = null;
+        List<Part>? pendingDecouplers = null;
 
         // Activate in reverse order (same as stock)
         for (int i = parts.Length - 1; i >= 0; i--)
         {
             Part part = parts[i];
-            if (delay > 0.0 && part.HasAny<EngineController>())
+            bool hasInactiveEngine = HasInactiveEngine(part);
+            bool hasInactiveDecoupler = HasInactiveDecoupler(part);
+
+            if (engineDelay > 0.0 && hasInactiveEngine)
             {
                 pendingEngines ??= new List<Part>();
                 pendingEngines.Add(part);
+            }
+            else if (decouplerDelay > 0.0 && hasInactiveDecoupler)
+            {
+                pendingDecouplers ??= new List<Part>();
+                pendingDecouplers.Add(part);
             }
             else
             {
@@ -85,62 +97,112 @@ static class StagingExecution
         GameReflection.SequenceList_updatingSequence?.SetValue(seqList, false);
         seqList.ResetCaches();
 
+        // Drain the IActivate buffer so IsActive flips and decouples are visible
+        // now, not at end of frame. This lets the following refresh see the
+        // correct VehicleConfig immediately.
+        InputEvents.IActivateInputBuffer.ApplyAll();
+
         vehicle.UpdateAfterPartTreeModification();
 
-        if (pendingEngines == null || pendingEngines.Count == 0)
+        bool anyPending = (pendingEngines != null && pendingEngines.Count > 0)
+                       || (pendingDecouplers != null && pendingDecouplers.Count > 0);
+        if (!anyPending)
             return null;
 
         if (DebugConfig.IgnitionDelay)
+        {
+            int eng = pendingEngines?.Count ?? 0;
+            int dec = pendingDecouplers?.Count ?? 0;
             DefaultCategory.Log.Debug(
                 $"[AutoStage] Split activation: seq {seqNumber}, " +
-                $"{pendingEngines.Count} engines pending, delay={delay:F1}s");
+                $"{dec} decouplers pending (delay={decouplerDelay:F1}s), " +
+                $"{eng} engines pending (delay={engineDelay:F1}s)");
+        }
 
-        return new PendingIgnition(vehicle, pendingEngines, delay);
+        return new PendingStaging(vehicle,
+            pendingDecouplers, decouplerDelay,
+            pendingEngines, engineDelay);
     }
 
     /// <summary>
-    /// Activates the pending engine parts (Phase 2). Called when the ignition timer expires.
-    /// Validates that parts still belong to the expected vehicle (a decouple in Phase 1
-    /// could have moved them to a new vehicle).
+    /// Fires the given pending parts. Validates each part still belongs to
+    /// the expected vehicle (an earlier decouple may have moved it).
     /// </summary>
-    public static void ActivatePendingEngines(PendingIgnition pending)
+    public static void ActivatePendingParts(Vehicle vehicle, List<Part> parts, string label)
     {
         int activated = 0;
-        foreach (Part part in pending.EngineParts)
+        foreach (Part part in parts)
         {
-            if (part.Tree != pending.Vehicle.Parts)
+            if (part.Tree != vehicle.Parts)
             {
                 DefaultCategory.Log.Warning(
-                    $"[AutoStage] Engine part '{part.DisplayName}' no longer belongs to vehicle, skipping.");
+                    $"[AutoStage] {label} part '{part.DisplayName}' no longer belongs to vehicle, skipping.");
                 continue;
             }
-            part.ActivateInStage(pending.Vehicle);
+            part.ActivateInStage(vehicle);
             activated++;
         }
 
         if (DebugConfig.IgnitionDelay)
             DefaultCategory.Log.Debug(
-                $"[AutoStage] Ignited {activated}/{pending.EngineParts.Count} engines");
+                $"[AutoStage] Fired {activated}/{parts.Count} {label} parts");
 
-        pending.Vehicle.Parts.SequenceList.ResetCaches();
+        vehicle.Parts.SequenceList.ResetCaches();
 
-        pending.Vehicle.UpdateAfterPartTreeModification();
+        // Drain the IActivate buffer so IsActive flips and decouples are visible
+        // now, not at end of frame. This lets the following refresh see the
+        // correct VehicleConfig immediately.
+        InputEvents.IActivateInputBuffer.ApplyAll();
+
+        vehicle.UpdateAfterPartTreeModification();
+    }
+
+    private static bool HasInactiveEngine(Part part)
+    {
+        Span<EngineController> engines = part.Modules.Get<EngineController>();
+        if (engines.Length == 0) return false;
+        for (int i = 0; i < engines.Length; i++)
+            if (!engines[i].IsActive) return true;
+        return false;
+    }
+
+    private static bool HasInactiveDecoupler(Part part)
+    {
+        Span<Decoupler> decouplers = part.Modules.Get<Decoupler>();
+        if (decouplers.Length == 0) return false;
+        for (int i = 0; i < decouplers.Length; i++)
+            if (!decouplers[i].IsActive) return true;
+        return false;
     }
 }
 
 /// <summary>
-/// Tracks engine parts waiting for ignition after a staging delay.
+/// Tracks parts waiting to fire after a staging delay. Decouplers and
+/// engines have independent countdowns measured from the staging trigger.
 /// </summary>
-class PendingIgnition
+class PendingStaging
 {
     public Vehicle Vehicle { get; }
-    public List<Part> EngineParts { get; }
-    public double RemainingDelay { get; set; }
+    public List<Part>? DecouplerParts { get; private set; }
+    public double DecouplerRemaining { get; set; }
+    public List<Part>? EngineParts { get; private set; }
+    public double EngineRemaining { get; set; }
 
-    public PendingIgnition(Vehicle vehicle, List<Part> engineParts, double delaySeconds)
+    public bool DecouplersPending => DecouplerParts != null && DecouplerParts.Count > 0;
+    public bool EnginesPending => EngineParts != null && EngineParts.Count > 0;
+    public bool AnyPending => DecouplersPending || EnginesPending;
+
+    public PendingStaging(Vehicle vehicle,
+        List<Part>? decouplerParts, double decouplerDelay,
+        List<Part>? engineParts, double engineDelay)
     {
         Vehicle = vehicle;
+        DecouplerParts = decouplerParts;
+        DecouplerRemaining = decouplerDelay;
         EngineParts = engineParts;
-        RemainingDelay = delaySeconds;
+        EngineRemaining = engineDelay;
     }
+
+    public void ClearDecouplers() => DecouplerParts = null;
+    public void ClearEngines() => EngineParts = null;
 }

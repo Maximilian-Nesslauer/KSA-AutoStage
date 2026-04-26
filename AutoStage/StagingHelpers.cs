@@ -8,21 +8,14 @@ static class StagingHelpers
     public static bool HasActiveEngineWithPropellant(Vehicle vehicle)
     {
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
-        foreach (Stage stage in vehicle.Parts.StageList.Stages)
+        Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
+        for (int i = 0; i < engines.Length; i++)
         {
-            ReadOnlySpan<Part> parts = stage.Parts;
-            for (int i = 0; i < parts.Length; i++)
-            {
-                Span<EngineController> engines = parts[i].Modules.Get<EngineController>();
-                for (int j = 0; j < engines.Length; j++)
-                {
-                    if (!engines[j].IsActive) continue;
-                    foreach (RocketCore core in engines[j].Cores)
-                        if (core.ResourceManager != null
-                            && core.ResourceManager.ResourceAvailable(moleStates))
-                            return true;
-                }
-            }
+            if (!engines[i].IsActive) continue;
+            foreach (RocketCore core in engines[i].Cores)
+                if (core.ResourceManager != null
+                    && core.ResourceManager.ResourceAvailable(moleStates))
+                    return true;
         }
         return false;
     }

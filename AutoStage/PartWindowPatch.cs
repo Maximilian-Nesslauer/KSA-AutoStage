@@ -2,7 +2,6 @@ using System;
 using System.Globalization;
 using AutoStage.Core;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
@@ -10,7 +9,9 @@ using KSA;
 namespace AutoStage;
 
 /// <summary>
-/// Adds "Ignition Delay" settings to the pinned Part Window via DrawPartInfo postfix.
+/// Adds "Ignition Delay" and "Decoupler Delay" settings to the pinned Part
+/// Window via DrawPartInfo postfix. Each section only shows if the part
+/// actually has the corresponding module.
 /// </summary>
 [HarmonyPatch(typeof(Part), nameof(Part.DrawPartInfo))]
 static class PartWindowPatch
@@ -19,21 +20,23 @@ static class PartWindowPatch
     {
         try
         {
-            DrawIgnitionDelay(__instance);
+            DrawDelays(__instance);
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Error($"[AutoStage] PartWindow draw error: {ex.Message}");
+            LogHelper.ErrorOnce("PartWindow.Draw",
+                $"[AutoStage] PartWindow draw error: {ex.Message}");
         }
     }
 
-    private static void DrawIgnitionDelay(Part part)
+    private static void DrawDelays(Part part)
     {
         if (!Mod.IgnitionDelayAvailable)
             return;
 
-        Span<EngineController> engines = part.SubtreeModules.Get<EngineController>();
-        if (engines.Length == 0)
+        bool hasEngine = part.SubtreeModules.Get<EngineController>().Length > 0;
+        bool hasDecoupler = part.SubtreeModules.Get<Decoupler>().Length > 0;
+        if (!hasEngine && !hasDecoupler)
             return;
 
         int seqNumber = part.Sequence;
@@ -46,29 +49,57 @@ static class PartWindowPatch
 
         Config.LoadVehicleOverrides(vehicle.Id);
 
-        bool hasOverride = Config.HasSequenceOverride(vehicle, seqNumber);
-        double effectiveDelay = Config.GetSequenceDelay(vehicle, seqNumber);
-        double engineDefault = Config.ComputeSequenceDelayFromEngines(vehicle, seqNumber);
-        float delayValue = (float)effectiveDelay;
-
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
-        ImGui.PushID("AutoStageIgnDelay");
+        string partName = part.Template.DisplayName;
 
-        string engineName = part.Template.DisplayName;
-        string headerText = string.Format(CultureInfo.InvariantCulture,
-            "Ignition Delay - {0} (Seq {1})", engineName, seqNumber);
-        ImGui.Text(headerText);
+        if (hasEngine)
+        {
+            DrawDelayBlock(
+                idScope: "AutoStageIgnDelay",
+                header: string.Format(CultureInfo.InvariantCulture,
+                    "Ignition Delay - {0} (Seq {1})", partName, seqNumber),
+                effectiveDelay: Config.GetSequenceEngineDelay(vehicle, seqNumber),
+                partDefault: Config.ComputeSequenceEngineDelay(vehicle, seqNumber),
+                hasOverride: Config.HasSequenceEngineOverride(vehicle, seqNumber),
+                setOverride: v => Config.SetSequenceEngineOverride(vehicle, seqNumber, v),
+                clearOverride: () => Config.ClearSequenceEngineOverride(vehicle, seqNumber));
+        }
 
+        if (hasDecoupler)
+        {
+            DrawDelayBlock(
+                idScope: "AutoStageDecDelay",
+                header: string.Format(CultureInfo.InvariantCulture,
+                    "Decoupler Delay - {0} (Seq {1})", partName, seqNumber),
+                effectiveDelay: Config.GetSequenceDecouplerDelay(vehicle, seqNumber),
+                partDefault: Config.ComputeSequenceDecouplerDelay(vehicle, seqNumber),
+                hasOverride: Config.HasSequenceDecouplerOverride(vehicle, seqNumber),
+                setOverride: v => Config.SetSequenceDecouplerOverride(vehicle, seqNumber, v),
+                clearOverride: () => Config.ClearSequenceDecouplerOverride(vehicle, seqNumber));
+        }
+    }
+
+    private static void DrawDelayBlock(
+        string idScope,
+        string header,
+        double effectiveDelay,
+        double partDefault,
+        bool hasOverride,
+        Action<double> setOverride,
+        Action clearOverride)
+    {
+        ImGui.PushID(idScope);
+
+        ImGui.Text(header);
         ImGui.Spacing();
 
+        float delayValue = (float)effectiveDelay;
         ImGui.SetNextItemWidth(120f);
         if (ImGui.InputFloat("###val"u8, ref delayValue, 0.1f, 1.0f, "%.1f"))
-        {
-            Config.SetSequenceOverride(vehicle, seqNumber, delayValue);
-        }
+            setOverride(delayValue);
         if (ImGui.IsItemDeactivatedAfterEdit())
             Config.FlushPendingSaves();
         ImGui.SameLine();
@@ -76,23 +107,24 @@ static class PartWindowPatch
 
         if (hasOverride)
         {
-            string sourceText = string.Format(CultureInfo.InvariantCulture,
-                "override (default: {0:F1} s)", engineDefault);
-            ImGui.TextColored(new float4(1f, 0.8f, 0.2f, 1f), sourceText);
+            string source = string.Format(CultureInfo.InvariantCulture,
+                "override (default: {0:F1} s)", partDefault);
+            ImGui.TextColored(new float4(1f, 0.8f, 0.2f, 1f), source);
 
             if (ImGui.SmallButton("Reset to default"u8))
             {
-                Config.ClearSequenceOverride(vehicle, seqNumber);
+                clearOverride();
                 Config.FlushPendingSaves();
             }
         }
         else
         {
-            string sourceText = string.Format(CultureInfo.InvariantCulture,
-                "engine default ({0:F1} s)", engineDefault);
-            ImGui.TextDisabled(sourceText);
+            string source = string.Format(CultureInfo.InvariantCulture,
+                "part default ({0:F1} s)", partDefault);
+            ImGui.TextDisabled(source);
         }
 
+        ImGui.Spacing();
         ImGui.PopID();
     }
 }

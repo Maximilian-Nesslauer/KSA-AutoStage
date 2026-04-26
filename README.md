@@ -23,18 +23,24 @@ Validated against KSA build version 2026.4.17.4184.
 
 - **AUTOSTAGE toggle button** on the BurnControl gauge panel
 - **Auto-burn continuation** - maintains BurnMode=Auto through staging so planned burns don't abort
-- **Cascade staging** - stages again if the next stage is also empty
-- **Ignition delay** - configurable delay between decoupler separation and engine ignition, simulating realistic engine spool-up time. Decouplers fire immediately, engines ignite after the configured delay.
+- **Cascade staging** - stages again if the next stage is empty or only has decouplers
+- **Configurable staging delays** - independent delays for decouplers and engines, simulating realistic separation and engine spool-up time
+- **On-screen countdowns** - "Decouple in X.Xs" and "Ignition in X.Xs" alerts during a delayed stage so you can see what's about to happen
 
-## Ignition Delay
+## Staging Delays
 
-After staging, decouplers fire immediately but engines wait a configurable delay before igniting.
+Two delays are configurable per part variant, both measured from the staging trigger:
+
+- **Engine ignition delay** - default values per stock engine variant (the small EngineA1 ignites after 2 s, EngineA3 after 3 s, etc.)
+- **Decoupler delay** - default 0 s (fires immediately, matches stock behaviour)
+
+Set the decoupler delay shorter than the engine delay if you want the lower stage to drop away before the upper stage lights up.
 
 ### Configuration
 
-**Settings window (Settings > Mods > AutoStage Settings):** Configure the ignition delay per engine variant. All known engine variants are listed with an input field for the delay in seconds. Click "Save" to persist changes.
+**Settings window (Settings > Mods > AutoStage Settings):** Two sections, "Engine Ignition Delays" and "Decoupler Delays". All known part variants are listed with an input field for the delay in seconds. Click "Save" to persist changes.
 
-**Part Window (right-click engine > Window):** Override the delay for a specific sequence on the current vehicle. This per-vehicle override takes priority over the global engine config.
+**Part Window (right-click part > Window):** Override the delay for a specific sequence on the current vehicle. Engines show "Ignition Delay", decouplers show "Decoupler Delay". Per-vehicle overrides take priority over the global config.
 
 ### Config files
 
@@ -44,9 +50,12 @@ Global config is stored in `Documents\My Games\Kitten Space Agency\mods\AutoStag
 [engine_delays]
 CorePropulsionA_Prefab_EngineA2 = 2.0
 CorePropulsionA_Prefab_EngineA3 = 5.0
+
+[decoupler_delays]
+CoreFairingA_Prefab_Interstage3W3HB = 1.0
 ```
 
-Per-vehicle sequence overrides are stored in `Documents\My Games\Kitten Space Agency\mods\AutoStage\vehicles\<vehicle-id>.toml`. These files are created automatically when you set an override in the Part Window.
+Per-vehicle sequence overrides are stored in `Documents\My Games\Kitten Space Agency\mods\AutoStage\vehicles\<vehicle-id>.toml`. These files are created automatically when you set an override in the Part Window. They have separate `[sequence_delays]` (engines) and `[decoupler_delays]` sections.
 
 Removing the mod does not affect / corrupt game saves.
 

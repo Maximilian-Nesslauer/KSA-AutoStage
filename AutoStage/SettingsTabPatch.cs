@@ -78,7 +78,8 @@ static class SettingsTabPatch
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Error($"[AutoStage] Settings draw error: {ex.Message}");
+            LogHelper.ErrorOnce("Settings.Draw",
+                $"[AutoStage] Settings draw error: {ex.Message}");
         }
 
         // Original EndRegionTab logic: close region (Columns + EndChild) + EndTabItem
@@ -92,40 +93,30 @@ static class SettingsTabPatch
         ImGui.Indent();
 
         ImGui.TextWrapped(
-            "Ignition delay per engine variant in seconds. " +
-            "After staging, decouplers fire immediately but engines " +
-            "wait the configured delay before igniting.");
+            "Per-part-variant delays in seconds. Both delays are measured " +
+            "from the staging trigger, so set decoupler delay shorter than " +
+            "engine delay if you want the decoupler to fire first.");
         ImGui.Spacing();
         ImGui.Spacing();
 
-        List<EngineInfo> engines = GetKnownEngines();
-        if (engines.Count > 0)
+        List<PartInfo> engines = GetKnownParts(
+            ref _knownEngines, t => t.RocketEngineControllers.Count > 0);
+        List<PartInfo> decouplers = GetKnownParts(
+            ref _knownDecouplers, t => t.Decoupler != null);
+
+        if (ImGui.CollapsingHeader("Engine Ignition Delays"u8, ImGuiTreeNodeFlags.DefaultOpen))
         {
-            // Find the longest display name to align the input fields
-            float maxNameWidth = 0f;
-            foreach (EngineInfo engine in engines)
-            {
-                float w = ImGui.CalcTextSize(engine.DisplayName).X;
-                if (w > maxNameWidth) maxNameWidth = w;
-            }
-            // Account for indent offset so SameLine positions correctly
-            float indentOffset = ImGui.GetCursorPosX();
-            float inputX = indentOffset + maxNameWidth + 15f;
+            DrawDelayTable(engines, "eng",
+                get: id => Config.GetEngineDelay(id),
+                set: (id, v) => Config.EngineDelays[id] = v);
+        }
 
-            foreach (EngineInfo engine in engines)
-            {
-                float delay = (float)Config.GetEngineDelay(engine.TemplateId);
-
-                ImGui.Text(engine.DisplayName);
-                ImGui.SameLine(inputX);
-                ImGui.SetNextItemWidth(130f);
-
-                string inputId = $"###delay_{engine.TemplateId}";
-                if (ImGui.InputFloat(inputId, ref delay, 0.1f, 1.0f, "%.1f"))
-                {
-                    Config.EngineDelays[engine.TemplateId] = Math.Max(0.0, (double)delay);
-                }
-            }
+        ImGui.Spacing();
+        if (ImGui.CollapsingHeader("Decoupler Delays"u8, ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawDelayTable(decouplers, "dec",
+                get: id => Config.GetDecouplerDelay(id),
+                set: (id, v) => Config.DecouplerDelays[id] = v);
         }
 
         ImGui.Spacing();
@@ -138,37 +129,66 @@ static class SettingsTabPatch
         ImGui.Unindent();
     }
 
-    private struct EngineInfo
+    private static void DrawDelayTable(List<PartInfo> parts, string idPrefix,
+        Func<string, double> get, Action<string, double> set)
+    {
+        if (parts.Count == 0)
+        {
+            ImGui.TextDisabled("(no matching parts loaded)"u8);
+            return;
+        }
+
+        // Find the longest display name to align the input fields
+        float maxNameWidth = 0f;
+        foreach (PartInfo p in parts)
+        {
+            float w = ImGui.CalcTextSize(p.DisplayName).X;
+            if (w > maxNameWidth) maxNameWidth = w;
+        }
+        float indentOffset = ImGui.GetCursorPosX();
+        float inputX = indentOffset + maxNameWidth + 15f;
+
+        foreach (PartInfo p in parts)
+        {
+            float delay = (float)get(p.TemplateId);
+
+            ImGui.Text(p.DisplayName);
+            ImGui.SameLine(inputX);
+            ImGui.SetNextItemWidth(130f);
+
+            string inputId = $"###{idPrefix}_{p.TemplateId}";
+            if (ImGui.InputFloat(inputId, ref delay, 0.1f, 1.0f, "%.1f"))
+                set(p.TemplateId, Math.Max(0.0, (double)delay));
+        }
+    }
+
+    private struct PartInfo
     {
         public string TemplateId;
         public string DisplayName;
     }
 
-    private static List<EngineInfo>? _knownEngines;
+    private static List<PartInfo>? _knownEngines;
+    private static List<PartInfo>? _knownDecouplers;
 
-    private static List<EngineInfo> GetKnownEngines()
+    private static List<PartInfo> GetKnownParts(ref List<PartInfo>? cache,
+        Func<PartTemplate, bool> filter)
     {
-        if (_knownEngines != null)
-            return _knownEngines;
+        if (cache != null)
+            return cache;
 
-        _knownEngines = new List<EngineInfo>();
+        cache = new List<PartInfo>();
         try
         {
-            object? allParts = GameReflection.ModLibrary_AllParts?.GetValue(null);
-            if (allParts == null) return _knownEngines;
-
-            MethodInfo? getList = allParts.GetType().GetMethod("GetList");
-            if (getList?.Invoke(allParts, null) is not System.Collections.IList list)
-                return _knownEngines;
+            if (GameReflection.ModLibrary_AllParts?.GetValue(null)
+                is not SerializedCollection<PartTemplate> collection)
+                return cache;
 
             var raw = new List<(string id, string name)>();
-            foreach (object? item in list)
+            foreach (PartTemplate template in collection.GetList())
             {
-                if (item is PartTemplate template
-                    && template.RocketEngineControllers.Count > 0)
-                {
+                if (filter(template))
                     raw.Add((template.Id, template.DisplayName));
-                }
             }
 
             // Find duplicate DisplayNames and disambiguate with a short suffix
@@ -181,32 +201,27 @@ static class SettingsTabPatch
                 string displayName = name;
                 if (nameCounts[name] > 1)
                 {
-                    // Extract short variant from TemplateId, e.g. "EngineA3" from
-                    // "CorePropulsionA_Prefab_EngineA3"
                     int lastUnderscore = id.LastIndexOf('_');
                     string suffix = lastUnderscore >= 0 ? id.Substring(lastUnderscore + 1) : id;
                     displayName = $"{name} ({suffix})";
                 }
-                _knownEngines.Add(new EngineInfo
-                {
-                    TemplateId = id,
-                    DisplayName = displayName
-                });
+                cache.Add(new PartInfo { TemplateId = id, DisplayName = displayName });
             }
 
-            _knownEngines.Sort((a, b) =>
+            cache.Sort((a, b) =>
                 string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning(
-                $"[AutoStage] Failed to enumerate engine templates: {ex.Message}");
+                $"[AutoStage] Failed to enumerate part templates: {ex.Message}");
         }
-        return _knownEngines;
+        return cache;
     }
 
     internal static void Reset()
     {
         _knownEngines = null;
+        _knownDecouplers = null;
     }
 }
