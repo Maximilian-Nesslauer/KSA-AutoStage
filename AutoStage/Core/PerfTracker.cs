@@ -8,6 +8,10 @@ namespace AutoStage.Core;
 /// <summary>
 /// Lightweight per-method Stopwatch accumulator for debug builds.
 /// Reports a summary to the log every 5 seconds.
+///
+/// Entries hold per-interval totals (count / total / min / max). They are
+/// cleared on each report, so each line in the log covers only the
+/// previous interval, not the whole session.
 /// </summary>
 static class PerfTracker
 {

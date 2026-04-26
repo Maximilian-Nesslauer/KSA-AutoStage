@@ -7,6 +7,9 @@ using KSA;
 
 namespace AutoStage;
 
+// Used as a type marker in GaugeButtonFlightComputer._enumLookup so the
+// XML patch can resolve Action="AutoStageToggle". The single value is never
+// inspected, only the runtime type identity.
 public enum AutoStageToggle { Enabled }
 
 /// <summary>
@@ -39,13 +42,16 @@ static class Patch_IsSet
 {
     static MethodBase TargetMethod()
     {
-        var open = VehicleReflection.FindGenericMethod("IsSet")
+        var open = VehicleReflection.FindGenericMethod("IsSet", parameterCount: 2)
             ?? throw new InvalidOperationException(
-                "[AutoStage] Vehicle.IsSet<T> not found.");
+                "[AutoStage] Vehicle.IsSet<T>(T, bool) not found.");
 
         return open.MakeGenericMethod(typeof(Enum));
     }
 
+    // The stock signature is IsSet<T>(T value, bool clicked). The clicked
+    // arg only matters for FlightComputerAction overloads; for our toggle
+    // the result is the persistent flag, independent of click animation.
     static bool Prefix(Enum value, ref bool __result)
     {
         if (value is not AutoStageToggle) return true;
@@ -63,9 +69,9 @@ static class Patch_IsFlightComputerDisabled
 {
     static MethodBase TargetMethod()
     {
-        var open = VehicleReflection.FindGenericMethod("IsFlightComputerDisabled")
+        var open = VehicleReflection.FindGenericMethod("IsFlightComputerDisabled", parameterCount: 1)
             ?? throw new InvalidOperationException(
-                "[AutoStage] Vehicle.IsFlightComputerDisabled<T> not found.");
+                "[AutoStage] Vehicle.IsFlightComputerDisabled<T>(T) not found.");
 
         return open.MakeGenericMethod(typeof(Enum));
     }
@@ -81,11 +87,13 @@ static class Patch_IsFlightComputerDisabled
 
 static class VehicleReflection
 {
-    public static MethodInfo? FindGenericMethod(string name)
+    public static MethodInfo? FindGenericMethod(string name, int parameterCount)
     {
         foreach (var method in typeof(Vehicle).GetMethods())
         {
-            if (method.Name == name && method.IsGenericMethodDefinition)
+            if (method.Name == name
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == parameterCount)
                 return method;
         }
         return null;
