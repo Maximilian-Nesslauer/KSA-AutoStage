@@ -17,7 +17,7 @@ Activates the next sequence whenever active engines run out of propellant. Works
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.4.18.4206.
+Validated against KSA build version 2026.5.3.4264.
 
 ## Features
 
