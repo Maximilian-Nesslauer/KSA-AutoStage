@@ -22,6 +22,8 @@ namespace AutoStage;
 [HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi))]
 static class SettingsTabPatch
 {
+    // Assumes Mods is the last tab, so the closest EndRegionTab before
+    // EndTabBar is the one to swap.
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
         var codes = new List<CodeInstruction>(instructions);
@@ -46,21 +48,34 @@ static class SettingsTabPatch
             return codes;
         }
 
-        bool found = false;
+        int swapIdx = -1;
+        int endRegionTabsAfterSwap = 0;
         for (int i = endTabBarIdx - 1; i >= 0; i--)
         {
-            if (codes[i].Calls(endRegionTab))
-            {
-                codes[i] = new CodeInstruction(OpCodes.Call, replacement)
-                    .MoveLabelsFrom(codes[i]);
-                found = true;
-                break;
-            }
+            if (!codes[i].Calls(endRegionTab))
+                continue;
+
+            if (swapIdx < 0)
+                swapIdx = i;
+            else
+                endRegionTabsAfterSwap++;
         }
 
-        if (!found)
+        if (swapIdx < 0)
+        {
             DefaultCategory.Log.Warning(
                 "[AutoStage] Transpiler: EndRegionTab not found before EndTabBar");
+            return codes;
+        }
+
+        codes[swapIdx] = new CodeInstruction(OpCodes.Call, replacement)
+            .MoveLabelsFrom(codes[swapIdx]);
+
+        if (endRegionTabsAfterSwap == 0)
+            DefaultCategory.Log.Warning(
+                "[AutoStage] Transpiler: only one EndRegionTab found in "
+                + "GameSettings.OnDrawUi. Mods tab is expected to be the last "
+                + "of several tabs. Swap may be targeting the wrong tab.");
 
         return codes;
     }

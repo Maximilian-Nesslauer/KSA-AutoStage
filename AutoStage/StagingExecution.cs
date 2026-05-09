@@ -25,6 +25,9 @@ static class StagingExecution
 {
     public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle)
     {
+        // Up front so every return path invalidates.
+        StagingHelpers.InvalidateSequenceCache();
+
         SequenceList seqList = vehicle.Parts.SequenceList;
         ReadOnlySpan<Sequence> sequences = seqList.Sequences;
 
@@ -96,10 +99,11 @@ static class StagingExecution
 
         GameReflection.SequenceList_updatingSequence?.SetValue(seqList, false);
         seqList.ResetCaches();
+        StagingHelpers.InvalidateSequenceCache();
 
-        // Drain the IActivate buffer so IsActive flips and decouples are visible
-        // now, not at end of frame. This lets the following refresh see the
-        // correct VehicleConfig immediately.
+        // Drain immediately so UpdateAfterPartTreeModification sees the new
+        // VehicleConfig. Sort to match stock's decoupler > engine > thruster.
+        TypedBufferExtensions.Sort(ref InputEvents.IActivateInputBuffer);
         InputEvents.IActivateInputBuffer.ApplyAll();
 
         vehicle.UpdateAfterPartTreeModification();
@@ -148,15 +152,15 @@ static class StagingExecution
                 $"[AutoStage] Fired {activated}/{parts.Count} {label} parts");
 
         vehicle.Parts.SequenceList.ResetCaches();
+        StagingHelpers.InvalidateSequenceCache();
 
-        // Drain the IActivate buffer so IsActive flips and decouples are visible
-        // now, not at end of frame. This lets the following refresh see the
-        // correct VehicleConfig immediately.
+        TypedBufferExtensions.Sort(ref InputEvents.IActivateInputBuffer);
         InputEvents.IActivateInputBuffer.ApplyAll();
 
         vehicle.UpdateAfterPartTreeModification();
     }
 
+    // Modules (not SubtreeModules) matches Part.ActivateInStage's scope.
     private static bool HasInactiveEngine(Part part)
     {
         Span<EngineController> engines = part.Modules.Get<EngineController>();

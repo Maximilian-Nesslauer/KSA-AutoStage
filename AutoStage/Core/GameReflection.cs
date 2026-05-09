@@ -13,15 +13,20 @@ static class GameReflection
     public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
         AccessTools.Method(typeof(Vehicle), "UpdateFromTaskResults");
 
-    // IgnitionDelay: SequenceList.ActiveSequence has a private setter
+    // Closed against System.Enum because PackData calls them on _enumValue
+    // typed as Enum.
+    public static readonly MethodInfo? Vehicle_IsSet_Enum =
+        FindGenericVehicleMethod("IsSet", parameterCount: 2)?.MakeGenericMethod(typeof(System.Enum));
+
+    public static readonly MethodInfo? Vehicle_IsFlightComputerDisabled_Enum =
+        FindGenericVehicleMethod("IsFlightComputerDisabled", parameterCount: 1)?.MakeGenericMethod(typeof(System.Enum));
+
     public static readonly PropertyInfo? SequenceList_ActiveSequence =
         AccessTools.Property(typeof(SequenceList), "ActiveSequence");
 
-    // IgnitionDelay: SequenceList._updatingSequence guards against re-entrant ResetCaches
     public static readonly FieldInfo? SequenceList_updatingSequence =
         AccessTools.Field(typeof(SequenceList), "_updatingSequence");
 
-    // IgnitionDelay: ModLibrary.AllParts (internal) for enumerating engine templates
     public static readonly FieldInfo? ModLibrary_AllParts =
         AccessTools.Field(typeof(ModLibrary), "AllParts");
 
@@ -31,6 +36,9 @@ static class GameReflection
         {
             ("GaugeButtonFlightComputer._enumLookup", GaugeButton_enumLookup),
             ("Vehicle.UpdateFromTaskResults", Vehicle_UpdateFromTaskResults),
+            ("Vehicle.IsSet<Enum>", Vehicle_IsSet_Enum),
+            ("Vehicle.IsFlightComputerDisabled<Enum>", Vehicle_IsFlightComputerDisabled_Enum),
+            ("SequenceList.ActiveSequence", SequenceList_ActiveSequence),
         };
 
         bool allOk = true;
@@ -39,7 +47,7 @@ static class GameReflection
             if (target == null)
             {
                 DefaultCategory.Log.Error(
-                    $"[AutoStage] {name} not found - game version may have changed.");
+                    $"[AutoStage] {name} not found, game version may have changed.");
                 allOk = false;
             }
         }
@@ -50,8 +58,8 @@ static class GameReflection
     {
         var targets = new (string name, object? target)[]
         {
-            ("SequenceList.ActiveSequence", SequenceList_ActiveSequence),
             ("SequenceList._updatingSequence", SequenceList_updatingSequence),
+            ("ModLibrary.AllParts", ModLibrary_AllParts),
         };
 
         bool allOk = true;
@@ -60,10 +68,22 @@ static class GameReflection
             if (target == null)
             {
                 DefaultCategory.Log.Error(
-                    $"[AutoStage] IgnitionDelay: {name} not found - game version may have changed.");
+                    $"[AutoStage] IgnitionDelay: {name} not found, game version may have changed.");
                 allOk = false;
             }
         }
         return allOk;
+    }
+
+    private static MethodInfo? FindGenericVehicleMethod(string name, int parameterCount)
+    {
+        foreach (MethodInfo method in typeof(Vehicle).GetMethods())
+        {
+            if (method.Name == name
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == parameterCount)
+                return method;
+        }
+        return null;
     }
 }

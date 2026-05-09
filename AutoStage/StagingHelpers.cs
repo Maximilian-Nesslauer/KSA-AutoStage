@@ -20,7 +20,27 @@ static class StagingHelpers
         return false;
     }
 
+    // HasNextEngineSequence is queried per frame by the gauge, but only
+    // changes on sequence activation.
+    private static Vehicle? _cachedVehicle;
+    private static bool _cachedHasNextEngineSequence;
+    private static int _cachedGeneration = -1;
+    private static int _sequenceGeneration;
+
+    public static void InvalidateSequenceCache() => _sequenceGeneration++;
+
     public static bool HasNextEngineSequence(Vehicle vehicle)
+    {
+        if (_cachedVehicle == vehicle && _cachedGeneration == _sequenceGeneration)
+            return _cachedHasNextEngineSequence;
+
+        _cachedVehicle = vehicle;
+        _cachedGeneration = _sequenceGeneration;
+        _cachedHasNextEngineSequence = ComputeHasNextEngineSequence(vehicle);
+        return _cachedHasNextEngineSequence;
+    }
+
+    private static bool ComputeHasNextEngineSequence(Vehicle vehicle)
     {
         foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
         {
@@ -30,5 +50,13 @@ static class StagingHelpers
                 if (parts[i].HasAny<EngineController>()) return true;
         }
         return false;
+    }
+
+    internal static void Reset()
+    {
+        _cachedVehicle = null;
+        _cachedGeneration = -1;
+        _sequenceGeneration = 0;
+        _cachedHasNextEngineSequence = false;
     }
 }

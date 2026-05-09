@@ -32,9 +32,10 @@ static class StagingDetectionPatch
     private static int _propagationFrames;
     private static FlightComputerBurnMode _triggeredMode;
     private static PendingStaging? _pendingStaging;
+    private static Vehicle? _currentVehicle;
 
     // 1 frame for worker thread to process new engines, +1 margin.
-    private const int PropagationDelay = 2;
+    private const int PropagationFrames = 2;
 
     internal static void Prefix(Vehicle __instance, SimStep simStep,
         out (FlightComputerBurnMode mode, bool hadPropellant, double deltaTime) __state)
@@ -59,6 +60,14 @@ static class StagingDetectionPatch
 #endif
         if (__instance != Program.ControlledVehicle || !Mod.AutoStageEnabled)
             return;
+
+        if (_currentVehicle != __instance)
+        {
+            _state = State.Monitoring;
+            _propagationFrames = 0;
+            _pendingStaging = null;
+            _currentVehicle = __instance;
+        }
 
         FlightComputer fc = __instance.FlightComputer;
         bool hasPropellant = StagingHelpers.HasActiveEngineWithPropellant(__instance);
@@ -87,7 +96,7 @@ static class StagingDetectionPatch
                 {
                     _state = State.Monitoring;
                 }
-                else if (_propagationFrames >= PropagationDelay)
+                else if (_propagationFrames >= PropagationFrames)
                 {
                     if (!IsBurnComplete(fc)
                         && StagingHelpers.HasNextEngineSequence(__instance))
@@ -110,7 +119,9 @@ static class StagingDetectionPatch
         PendingStaging? p = _pendingStaging;
         if (p == null)
         {
-            // Should not happen, but recover
+            LogHelper.ErrorOnce("StagingDetection.AwaitingIgnition.NoPending",
+                "[AutoStage] AwaitingIgnition with no pending staging, "
+                + "recovering to Monitoring. Please report.");
             _state = State.Monitoring;
             return;
         }
@@ -211,7 +222,6 @@ static class StagingDetectionPatch
         }
     }
 
-    // Burn complete = remaining dV reversed direction (dot <= 0). Don't stage after completion.
     private static bool IsBurnComplete(FlightComputer fc)
         => fc.Burn != null
            && float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci) <= 0f;
@@ -222,5 +232,6 @@ static class StagingDetectionPatch
         _propagationFrames = 0;
         _triggeredMode = FlightComputerBurnMode.Manual;
         _pendingStaging = null;
+        _currentVehicle = null;
     }
 }

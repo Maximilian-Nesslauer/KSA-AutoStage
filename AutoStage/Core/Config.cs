@@ -33,6 +33,10 @@ static class Config
 
     private static readonly HashSet<string> _dirtyVehicles = new();
 
+    // Blocks SaveGlobalConfig after a parse failure so we don't write the
+    // half-loaded state back over the user's file.
+    private static bool _globalConfigLoadFailed;
+
     public static void Init()
     {
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -50,6 +54,7 @@ static class Config
         _vehicleEngineOverrides.Clear();
         _vehicleDecouplerOverrides.Clear();
         _dirtyVehicles.Clear();
+        _globalConfigLoadFailed = false;
     }
 
     private static void SetDefaults()
@@ -130,6 +135,7 @@ static class Config
     {
         EngineDelays.Clear();
         DecouplerDelays.Clear();
+        _globalConfigLoadFailed = false;
 
         if (!File.Exists(_configPath))
         {
@@ -155,7 +161,11 @@ static class Config
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Error($"[AutoStage] Failed to load config: {ex.Message}");
+            EngineDelays.Clear();
+            DecouplerDelays.Clear();
+            _globalConfigLoadFailed = true;
+            DefaultCategory.Log.Error(
+                $"[AutoStage] Failed to load config ({_configPath}): {ex.Message}");
         }
     }
 
@@ -171,6 +181,14 @@ static class Config
 
     public static void SaveGlobalConfig()
     {
+        if (_globalConfigLoadFailed)
+        {
+            DefaultCategory.Log.Warning(
+                "[AutoStage] Skipping save, last load failed and the in-memory "
+                + "config is empty. Fix the file manually before saving from the UI.");
+            return;
+        }
+
         try
         {
             Directory.CreateDirectory(_modDir);
@@ -196,10 +214,12 @@ static class Config
 
     private static void WriteDelaySection(StreamWriter writer, Dictionary<string, double> source)
     {
-        foreach (var kvp in source)
+        var keys = new List<string>(source.Keys);
+        keys.Sort(StringComparer.Ordinal);
+        foreach (string key in keys)
         {
             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{0} = {1:F1}", kvp.Key, kvp.Value));
+                "{0} = {1:F1}", key, source[key]));
         }
     }
 
@@ -350,9 +370,22 @@ static class Config
         }
         catch (Exception ex)
         {
+            _vehicleEngineOverrides.Remove(vehicleId);
+            _vehicleDecouplerOverrides.Remove(vehicleId);
             DefaultCategory.Log.Error(
                 $"[AutoStage] Failed to load vehicle overrides for {vehicleId}: {ex.Message}");
         }
+    }
+
+    public static void RemoveVehicle(string vehicleId)
+    {
+        if (_dirtyVehicles.Contains(vehicleId))
+        {
+            SaveVehicleOverrides(vehicleId);
+            _dirtyVehicles.Remove(vehicleId);
+        }
+        _vehicleEngineOverrides.Remove(vehicleId);
+        _vehicleDecouplerOverrides.Remove(vehicleId);
     }
 
     private static void LoadSequenceDelays(Dictionary<string, string> raw, Dictionary<int, double> target)
@@ -407,10 +440,12 @@ static class Config
 
     private static void WriteSequenceDelays(StreamWriter writer, Dictionary<int, double> source)
     {
-        foreach (var kvp in source)
+        var keys = new List<int>(source.Keys);
+        keys.Sort();
+        foreach (int key in keys)
         {
             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{0} = {1:F1}", kvp.Key, kvp.Value));
+                "{0} = {1:F1}", key, source[key]));
         }
     }
 

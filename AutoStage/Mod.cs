@@ -11,10 +11,13 @@ public sealed class Mod
 {
     private static Harmony? _harmony;
 
+    // Keep in sync with README.md.
     private const string TestedGameVersion = "v2026.5.6.4337";
 
     internal static bool AutoStageEnabled;
     internal static bool IgnitionDelayAvailable;
+
+    private static bool _enumInjected;
 
     /// <summary>
     /// Injects our enum into the gauge button lookup before the game processes
@@ -26,7 +29,7 @@ public sealed class Mod
         if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug("[AutoStage] ImmediateLoad: injecting enum...");
 
-        InjectEnumLookup();
+        _enumInjected = InjectEnumLookup();
     }
 
     [StarMapAllModsLoaded]
@@ -41,14 +44,19 @@ public sealed class Mod
 
         Config.Init();
 
+#if DEBUG
+        PerfTracker.Reset();
+#endif
+
         _harmony = new Harmony("com.maxi.autostage");
 
-        bool coreOk = GameReflection.ValidateAll();
+        bool coreOk = _enumInjected && GameReflection.ValidateAll();
         if (coreOk)
         {
             _harmony.CreateClassProcessor(typeof(Patch_ToggleEnum)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_IsSet)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_IsFlightComputerDisabled)).Patch();
+            _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ActivateNextSequence)).Patch();
             _harmony.Patch(GameReflection.Vehicle_UpdateFromTaskResults,
                 prefix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Prefix)),
                 postfix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Postfix)));
@@ -58,7 +66,7 @@ public sealed class Mod
         }
         else
         {
-            DefaultCategory.Log.Warning("[AutoStage] Disabled - reflection targets not found.");
+            DefaultCategory.Log.Warning("[AutoStage] Disabled, reflection targets not found.");
         }
 
         if (coreOk && GameReflection.ValidateIgnitionDelay())
@@ -66,6 +74,7 @@ public sealed class Mod
             IgnitionDelayAvailable = true;
             _harmony.CreateClassProcessor(typeof(PartWindowPatch)).Patch();
             _harmony.CreateClassProcessor(typeof(SettingsTabPatch)).Patch();
+            _harmony.CreateClassProcessor(typeof(Patch_Vehicle_Dispose)).Patch();
 
             if (DebugConfig.IgnitionDelay)
                 DefaultCategory.Log.Debug("[AutoStage] IgnitionDelay patches applied.");
@@ -74,7 +83,7 @@ public sealed class Mod
         {
             IgnitionDelayAvailable = false;
             DefaultCategory.Log.Warning(
-                "[AutoStage] IgnitionDelay disabled - reflection targets not found.");
+                "[AutoStage] IgnitionDelay disabled, reflection targets not found.");
         }
 
         DefaultCategory.Log.Info("[AutoStage] Loaded.");
@@ -88,10 +97,15 @@ public sealed class Mod
         AutoStageEnabled = false;
         IgnitionDelayAvailable = false;
         StagingDetectionPatch.Reset();
+        StagingHelpers.Reset();
         SettingsTabPatch.Reset();
         Config.Reset();
         LogHelper.Reset();
-        RemoveEnumLookup();
+        if (_enumInjected)
+        {
+            RemoveEnumLookup();
+            _enumInjected = false;
+        }
 #if DEBUG
         PerfTracker.Reset();
 #endif
@@ -100,16 +114,17 @@ public sealed class Mod
 
     private const string EnumLookupKey = "AutoStageToggle";
 
-    private static void InjectEnumLookup()
+    private static bool InjectEnumLookup()
     {
         if (!TryGetEnumLookup(out var dict))
-            return;
+            return false;
 
         dict[EnumLookupKey] = typeof(AutoStageToggle);
 
         if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug(
                 $"[AutoStage] Injected {EnumLookupKey} into _enumLookup ({dict.Count} entries).");
+        return true;
     }
 
     private static void RemoveEnumLookup()
