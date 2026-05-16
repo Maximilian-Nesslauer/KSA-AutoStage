@@ -101,12 +101,11 @@ static class StagingExecution
         seqList.ResetCaches();
         StagingHelpers.InvalidateSequenceCache();
 
-        // Drain immediately so UpdateAfterPartTreeModification sees the new
-        // VehicleConfig. Sort to match stock's decoupler > engine > thruster.
-        TypedBufferExtensions.Sort(ref InputEvents.IActivateInputBuffer);
-        InputEvents.IActivateInputBuffer.ApplyAll();
-
-        vehicle.UpdateAfterPartTreeModification();
+        // Must not drain IActivateInputBuffer from inside UpdateFromTaskResults:
+        // Decoupler.Decouple -> Vehicle.Split -> Vehicle.AddToTask mutates the
+        // VehicleUpdateTask list that ApplyResultsToVehicles is iterating. The
+        // stock drain in Program.PrepareFrame runs a few ms later in the same
+        // frame, after the foreach completes.
 
         bool anyPending = (pendingEngines != null && pendingEngines.Count > 0)
                        || (pendingDecouplers != null && pendingDecouplers.Count > 0);
@@ -153,11 +152,6 @@ static class StagingExecution
 
         vehicle.Parts.SequenceList.ResetCaches();
         StagingHelpers.InvalidateSequenceCache();
-
-        TypedBufferExtensions.Sort(ref InputEvents.IActivateInputBuffer);
-        InputEvents.IActivateInputBuffer.ApplyAll();
-
-        vehicle.UpdateAfterPartTreeModification();
     }
 
     // Modules (not SubtreeModules) matches Part.ActivateInStage's scope.

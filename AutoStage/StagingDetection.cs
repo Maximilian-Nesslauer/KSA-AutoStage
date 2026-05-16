@@ -37,8 +37,8 @@ static class StagingDetectionPatch
     // 1 frame for worker thread to process new engines, +1 margin.
     private const int PropagationFrames = 2;
 
-    internal static void Prefix(Vehicle __instance, SimStep simStep,
-        out (FlightComputerBurnMode mode, bool hadPropellant, double deltaTime) __state)
+    internal static void Prefix(Vehicle __instance,
+        out (FlightComputerBurnMode mode, bool hadPropellant) __state)
     {
         if (__instance != Program.ControlledVehicle || !Mod.AutoStageEnabled)
         {
@@ -47,13 +47,12 @@ static class StagingDetectionPatch
         }
         __state = (
             __instance.FlightComputer.BurnMode,
-            StagingHelpers.HasActiveEngineWithPropellant(__instance),
-            simStep.DeltaTime
+            StagingHelpers.HasActiveEngineWithPropellant(__instance)
         );
     }
 
     internal static void Postfix(Vehicle __instance,
-        (FlightComputerBurnMode mode, bool hadPropellant, double deltaTime) __state)
+        (FlightComputerBurnMode mode, bool hadPropellant) __state)
     {
 #if DEBUG
         long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
@@ -85,7 +84,7 @@ static class StagingDetectionPatch
 
             case State.AwaitingIgnition:
                 MaintainBurnMode(fc);
-                TickPendingStaging(__instance, __state.deltaTime);
+                TickPendingStaging(__instance, __instance.KinematicMeasurements.DeltaTime);
                 break;
 
             case State.AwaitingPropagation:
