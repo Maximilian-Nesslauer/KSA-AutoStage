@@ -107,6 +107,16 @@ static class StagingExecution
         // stock drain in Program.PrepareFrame runs a few ms later in the same
         // frame, after the foreach completes.
 
+        // part.ActivateInStage on engines flips IsActive=true directly, bypassing
+        // InputEvents.IActivateInputData and the VehicleFlightComputerReset queue
+        // it would otherwise enqueue. FlightComputer.VehicleConfig only counts
+        // IsActive=true engines, so without this refresh BurnTarget.BurnDuration
+        // stays 0 and Auto-burn flips back to Manual on the next UpdateBurnTarget
+        // tick. Decoupler activations get the refresh for free via Vehicle.Split;
+        // engine-only activations do not. Safe to call from the Postfix because
+        // UpdateAfterPartTreeModification does not touch Vehicle.UpdateTask.
+        vehicle.UpdateAfterPartTreeModification();
+
         bool anyPending = (pendingEngines != null && pendingEngines.Count > 0)
                        || (pendingDecouplers != null && pendingDecouplers.Count > 0);
         if (!anyPending)
@@ -152,6 +162,11 @@ static class StagingExecution
 
         vehicle.Parts.SequenceList.ResetCaches();
         StagingHelpers.InvalidateSequenceCache();
+
+        // Same FlightComputer.VehicleConfig refresh as ActivateNextSequenceSplit:
+        // delayed engine activation goes through part.ActivateInStage which does
+        // not propagate to VehicleConfig on its own.
+        vehicle.UpdateAfterPartTreeModification();
     }
 
     // Modules (not SubtreeModules) matches Part.ActivateInStage's scope.
