@@ -7,8 +7,8 @@ namespace AutoStage.Core;
 
 static class GameReflection
 {
-    public static readonly FieldInfo? GaugeButton_enumLookup =
-        AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumLookup");
+    public static readonly FieldInfo? GaugeButton_EnumTypes =
+        AccessTools.Field(typeof(GaugeButtonFlightComputer), "EnumTypes");
 
     public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
         AccessTools.Method(typeof(Vehicle), "UpdateFromTaskResults");
@@ -34,7 +34,7 @@ static class GameReflection
     {
         var targets = new (string name, object? target)[]
         {
-            ("GaugeButtonFlightComputer._enumLookup", GaugeButton_enumLookup),
+            ("GaugeButtonFlightComputer.EnumTypes", GaugeButton_EnumTypes),
             ("Vehicle.UpdateFromTaskResults", Vehicle_UpdateFromTaskResults),
             ("Vehicle.IsSet<Enum>", Vehicle_IsSet_Enum),
             ("Vehicle.IsFlightComputerDisabled<Enum>", Vehicle_IsFlightComputerDisabled_Enum),

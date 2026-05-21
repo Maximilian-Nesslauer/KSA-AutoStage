@@ -4,7 +4,9 @@
        left of the DeltaV digits display (X<0.495), same row as the screws. -->
   <Copy Path="//GaugeCanvas[@Id='BurnControl']/Component[@Name='Buttons']" Pos="Append">
     <Button X="0.062" Y="0.826" Width="0.300" Height="0.174"
-            Label="AUTOSTAGE" ForeColor="Green" TextColor="Black" TextScale="0.28">
+            Label="AUTOSTAGE" TextScale="0.28">
+      <TextColor Name="Black" />
+      <ActiveColor Name="Green" />
       <FlightComputer Action="AutoStageToggle" Value="Enabled" Toggle="true"/>
       <Tooltip Value="Automatically stage when engines run out of propellant during a burn."/>
     </Button>

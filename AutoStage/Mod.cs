@@ -12,7 +12,7 @@ public sealed class Mod
     private static Harmony? _harmony;
 
     // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.5.10.4424";
+    private const string TestedGameVersion = "v2026.5.11.4462";
 
     internal static bool AutoStageEnabled;
     internal static bool IgnitionDelayAvailable;
@@ -20,8 +20,10 @@ public sealed class Mod
     private static bool _enumInjected;
 
     /// <summary>
-    /// Injects our enum into the gauge button lookup before the game processes
-    /// Gauges.xml, so BurnControlPatch.xml can resolve Action="AutoStageToggle".
+    /// Injects our enum into GaugeButtonFlightComputer.EnumTypes before the
+    /// game processes Gauges.xml, so BurnControlPatch.xml can resolve
+    /// Action="AutoStageToggle". The game looks up the entry by Type.Name,
+    /// which matches "AutoStageToggle".
     /// </summary>
     [StarMapImmediateLoad]
     public void OnImmediateLoad(KSA.Mod mod)
@@ -29,7 +31,7 @@ public sealed class Mod
         if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug("[AutoStage] ImmediateLoad: injecting enum...");
 
-        _enumInjected = InjectEnumLookup();
+        _enumInjected = InjectEnumType();
     }
 
     [StarMapAllModsLoaded]
@@ -103,7 +105,7 @@ public sealed class Mod
         LogHelper.Reset();
         if (_enumInjected)
         {
-            RemoveEnumLookup();
+            RemoveEnumType();
             _enumInjected = false;
         }
 #if DEBUG
@@ -112,44 +114,52 @@ public sealed class Mod
         DefaultCategory.Log.Info("[AutoStage] Unloaded.");
     }
 
-    private const string EnumLookupKey = "AutoStageToggle";
-
-    private static bool InjectEnumLookup()
+    private static bool InjectEnumType()
     {
-        if (!TryGetEnumLookup(out var dict))
+        if (!TryGetEnumTypes(out var list))
             return false;
 
-        dict[EnumLookupKey] = typeof(AutoStageToggle);
+        // Guard against duplicate entries on reload, since GaugeButtonFlightComputer
+        // matches by Type.Name and would happily pick the first hit.
+        if (list.Any(opt => opt.Type == typeof(AutoStageToggle)))
+        {
+            if (DebugConfig.AutoStage)
+                DefaultCategory.Log.Debug(
+                    $"[AutoStage] AutoStageToggle already present in EnumTypes ({list.Count} entries).");
+            return true;
+        }
+
+        list.Add(new EnumTypeOption(typeof(AutoStageToggle)));
 
         if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug(
-                $"[AutoStage] Injected {EnumLookupKey} into _enumLookup ({dict.Count} entries).");
+                $"[AutoStage] Appended AutoStageToggle to EnumTypes ({list.Count} entries).");
         return true;
     }
 
-    private static void RemoveEnumLookup()
+    private static void RemoveEnumType()
     {
-        if (!TryGetEnumLookup(out var dict))
+        if (!TryGetEnumTypes(out var list))
             return;
 
-        dict.Remove(EnumLookupKey);
+        list.RemoveAll(opt => opt.Type == typeof(AutoStageToggle));
     }
 
-    private static bool TryGetEnumLookup(out Dictionary<string, Type> dict)
+    private static bool TryGetEnumTypes(out List<EnumTypeOption> list)
     {
-        dict = null!;
-        if (GameReflection.GaugeButton_enumLookup == null)
+        list = null!;
+        if (GameReflection.GaugeButton_EnumTypes == null)
         {
             DefaultCategory.Log.Error(
-                "[AutoStage] GaugeButtonFlightComputer._enumLookup not found.");
+                "[AutoStage] GaugeButtonFlightComputer.EnumTypes not found.");
             return false;
         }
-        if (GameReflection.GaugeButton_enumLookup.GetValue(null) is not Dictionary<string, Type> found)
+        if (GameReflection.GaugeButton_EnumTypes.GetValue(null) is not List<EnumTypeOption> found)
         {
-            DefaultCategory.Log.Error("[AutoStage] _enumLookup is null or unexpected type.");
+            DefaultCategory.Log.Error("[AutoStage] EnumTypes is null or unexpected type.");
             return false;
         }
-        dict = found;
+        list = found;
         return true;
     }
 }
