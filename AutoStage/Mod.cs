@@ -12,7 +12,7 @@ public sealed class Mod
     private static Harmony? _harmony;
 
     // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.7.4.4860";
+    private const string TestedGameVersion = "v2026.7.5.4892";
 
     internal static bool AutoStageEnabled;
     internal static bool IgnitionDelayAvailable;
