@@ -88,6 +88,16 @@ Required only to build the mod from source. Targets **.NET 10**.
 | [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
 | [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
 
+## Testing
+
+`AutoStage.HarnessTests/` is a developer-only test suite for [HeadlessHarness](https://github.com/Maximilian-Nesslauer/KSA-HeadlessHarness), which brings the real game up GPU-free and runs plug-in tests against the live simulation:
+
+- `autostage-api-drift` boots AutoStage's actual load path and checks every reflection target and the gauge enum injection against the current game build, so an update that breaks the mod is caught without flying anything.
+- `autostage-flight` flies a staged save at full manual throttle and asserts that AutoStage performs every further staging on its own.
+- `autostage-delays` measures that configured decoupler and engine ignition delays fire on time.
+
+To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). The flying tests use the save named by `KSA_HEADLESS_VEHICLE` and skip when it is unset. Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
+
 ## Mod compatibility
 
 - Known conflicts: none

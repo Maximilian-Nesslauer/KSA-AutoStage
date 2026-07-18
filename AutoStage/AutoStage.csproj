@@ -12,6 +12,11 @@
     <PackageReference Include="StarMap.API" Version="0.3.6" />
   </ItemGroup>
 
+  <!-- The headless test consumer boots the mod's internal entry points and reflection helpers. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="AutoStage.HarnessTests" />
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="KSA">
       <HintPath>..\..\..\refs\game\KSA.dll</HintPath>
