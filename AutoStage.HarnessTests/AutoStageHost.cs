@@ -39,6 +39,13 @@ internal static class AutoStageHost
     // circular orbit above the home body.
     public static Vehicle SpawnFromSave(HeadlessSession session, string saveId, string id, out Astronomical homeBody)
     {
+        // GrainGeometryLibrary.LoadAll runs during game bring-up next to SubstanceLibrary.LoadAll,
+        // and the headless bring-up only does the latter, so a save with a solid motor would throw
+        // "No grain geometries loaded" out of SolidGrainSegment.CreateComponents. Load it here
+        // rather than depending on some other consumer's test having run first.
+        if (GrainGeometryLibrary.All().IsEmpty)
+            GrainGeometryLibrary.LoadAll();
+
         CelestialSystem system = session.System;
         if (system.HomeBody is not IParentBody home || home is not Astronomical body)
             throw new InvalidOperationException("the loaded system has no home body to orbit.");

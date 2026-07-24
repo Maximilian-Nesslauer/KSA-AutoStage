@@ -66,6 +66,21 @@ static class StagingExecution
         GameReflection.SequenceList_ActiveSequence.SetValue(seqList, seqNumber);
         TimedAlert.Create($"Sequence {seqNumber} activated", Color.Yellow, 3.0);
 
+        if (DebugConfig.AutoStage)
+        {
+            int engineParts = 0;
+            int decouplerParts = 0;
+            ReadOnlySpan<Part> members = target.Parts;
+            for (int i = 0; i < members.Length; i++)
+            {
+                if (members[i].HasAny<EngineController>()) engineParts++;
+                if (members[i].HasAny<Decoupler>()) decouplerParts++;
+            }
+            DefaultCategory.Log.Debug(
+                $"[AutoStage] Activating sequence {seqNumber}: {members.Length} part(s), "
+                + $"{engineParts} with an engine, {decouplerParts} with a decoupler.");
+        }
+
         // Guard against re-entrant ResetCaches during part activation (same as stock)
         GameReflection.SequenceList_updatingSequence?.SetValue(seqList, true);
         target.Activated = true;

@@ -8,8 +8,9 @@ using KSA;
 namespace AutoStage.Core;
 
 /// <summary>
-/// Manages ignition / decoupler delay configuration with two layers:
-/// 1. Global config (autostage.toml) with per-part-variant delays
+/// Manages staging configuration with two layers:
+/// 1. Global config (autostage.toml) with per-part-variant delays and the
+///    staging behaviour switches
 /// 2. Per-vehicle overrides (vehicles/{id}.toml) with per-sequence delays
 ///
 /// Engine and decoupler delays are tracked independently. Decoupler delays
@@ -22,6 +23,14 @@ static class Config
     private static string _modDir = string.Empty;
     private static string _vehiclesDir = string.Empty;
     private static string _configPath = string.Empty;
+
+    public const bool DropSpentStagesDefault = true;
+
+    /// <summary>
+    /// Stage early when the next sequence would shed nothing but burnt-out
+    /// engines, instead of waiting for the whole vehicle to run dry.
+    /// </summary>
+    public static bool DropSpentStages { get; set; } = DropSpentStagesDefault;
 
     // Part Template ID -> delay in seconds
     public static Dictionary<string, double> EngineDelays { get; } = new();
@@ -51,6 +60,7 @@ static class Config
     {
         EngineDelays.Clear();
         DecouplerDelays.Clear();
+        DropSpentStages = DropSpentStagesDefault;
         _vehicleEngineOverrides.Clear();
         _vehicleDecouplerOverrides.Clear();
         _dirtyVehicles.Clear();
@@ -127,6 +137,25 @@ static class Config
         return false;
     }
 
+    private static bool ReadFlag(Dictionary<string, Dictionary<string, string>> sections,
+        string section, string key, bool fallback)
+    {
+        if (!sections.TryGetValue(section, out var entries)
+            || !entries.TryGetValue(key, out string? raw))
+            return fallback;
+
+        if (bool.TryParse(raw, out bool parsed))
+            return parsed;
+
+        // Worth saying out loud: bool.TryParse rejects 0/no/off, and the next
+        // save rewrites the line, so a user who meant to switch something off
+        // would otherwise get the default back with no trace of why.
+        DefaultCategory.Log.Warning(
+            $"[AutoStage] Config: [{section}] {key} = '{raw}' is not true or false, "
+            + $"using {(fallback ? "true" : "false")}.");
+        return fallback;
+    }
+
     #endregion
 
     #region Global Config
@@ -135,6 +164,7 @@ static class Config
     {
         EngineDelays.Clear();
         DecouplerDelays.Clear();
+        DropSpentStages = DropSpentStagesDefault;
         _globalConfigLoadFailed = false;
 
         if (!File.Exists(_configPath))
@@ -154,15 +184,22 @@ static class Config
             if (sections.TryGetValue("decoupler_delays", out var decouplers))
                 LoadDelaySection(decouplers, DecouplerDelays);
 
-            if (DebugConfig.IgnitionDelay)
+            DropSpentStages = ReadFlag(sections, "staging", "drop_spent_stages",
+                DropSpentStagesDefault);
+
+            // Either flag: the delays belong to IgnitionDelay, drop_spent_stages
+            // to AutoStage, and one line reports both.
+            if (DebugConfig.IgnitionDelay || DebugConfig.AutoStage)
                 DefaultCategory.Log.Debug(
                     $"[AutoStage] Config loaded: {EngineDelays.Count} engine delays, " +
-                    $"{DecouplerDelays.Count} decoupler delays");
+                    $"{DecouplerDelays.Count} decoupler delays, " +
+                    $"drop_spent_stages={DropSpentStages}");
         }
         catch (Exception ex)
         {
             EngineDelays.Clear();
             DecouplerDelays.Clear();
+            DropSpentStages = DropSpentStagesDefault;
             _globalConfigLoadFailed = true;
             DefaultCategory.Log.Error(
                 $"[AutoStage] Failed to load config ({_configPath}): {ex.Message}");
@@ -193,7 +230,15 @@ static class Config
         {
             Directory.CreateDirectory(_modDir);
             using var writer = new StreamWriter(_configPath);
-            writer.WriteLine("# AutoStage delay configuration.");
+            writer.WriteLine("# AutoStage configuration.");
+            writer.WriteLine();
+            writer.WriteLine("[staging]");
+            writer.WriteLine("# Stage as soon as the next sequence would shed nothing but");
+            writer.WriteLine("# burnt-out engines, instead of waiting for the whole vehicle to");
+            writer.WriteLine("# run dry. This is what drops spent boosters off a core stage.");
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "drop_spent_stages = {0}", DropSpentStages ? "true" : "false"));
+            writer.WriteLine();
             writer.WriteLine("# Per-part-variant delays keyed by Part Template ID.");
             writer.WriteLine("# Values are seconds to wait after staging before the part activates.");
             writer.WriteLine();

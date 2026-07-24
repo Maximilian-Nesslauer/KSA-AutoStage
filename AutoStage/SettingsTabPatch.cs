@@ -107,6 +107,26 @@ static class SettingsTabPatch
     {
         ImGui.Indent();
 
+        // Takes effect immediately; the Save button below writes it to disk,
+        // same as the delay tables.
+        bool dropSpentStages = Config.DropSpentStages;
+        if (ImGui.Checkbox("Drop spent stages early"u8, ref dropSpentStages))
+            Config.DropSpentStages = dropSpentStages;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Stage as soon as the next sequence would shed nothing but burnt-out engines, so spent boosters drop while the core stage keeps firing. Off: staging waits until every active engine is dry."u8);
+
+        ImGui.Spacing();
+        ImGui.Spacing();
+
+        // The delay tables need the part library and the sequence internals the
+        // ignition-delay reflection resolves; the checkbox above does not.
+        if (!Mod.IgnitionDelayAvailable)
+        {
+            ImGui.TextDisabled("(delay settings unavailable on this game build)"u8);
+            ImGui.Unindent();
+            return;
+        }
+
         ImGui.TextWrapped(
             "Per-part-variant delays in seconds. Both delays are measured " +
             "from the staging trigger, so set decoupler delay shorter than " +

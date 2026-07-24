@@ -59,9 +59,16 @@ public sealed class Mod
             _harmony.CreateClassProcessor(typeof(Patch_IsSet)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_IsFlightComputerDisabled)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ActivateNextSequence)).Patch();
+            _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ResetCaches)).Patch();
             _harmony.Patch(GameReflection.Vehicle_UpdateFromTaskResults,
                 prefix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Prefix)),
                 postfix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Postfix)));
+
+            // The settings window carries the only in-game switch for the
+            // spent-stage drop, which uses none of the ignition-delay reflection
+            // targets, so it must not go down with them. The delay tables inside
+            // it hide themselves via Mod.IgnitionDelayAvailable.
+            _harmony.CreateClassProcessor(typeof(SettingsTabPatch)).Patch();
 
             if (DebugConfig.AutoStage)
                 DefaultCategory.Log.Debug("[AutoStage] Core patches applied.");
@@ -75,7 +82,6 @@ public sealed class Mod
         {
             IgnitionDelayAvailable = true;
             _harmony.CreateClassProcessor(typeof(PartWindowPatch)).Patch();
-            _harmony.CreateClassProcessor(typeof(SettingsTabPatch)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_Vehicle_Dispose)).Patch();
 
             if (DebugConfig.IgnitionDelay)

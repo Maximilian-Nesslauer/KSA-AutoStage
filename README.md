@@ -2,7 +2,7 @@
 
 Automatic staging for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
 
-Activates the next sequence whenever active engines run out of propellant. Works during auto-burns (continues the burn instead of aborting) and manual burns.
+Activates the next sequence whenever active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns.
 
 <table>
   <tr>
@@ -24,8 +24,26 @@ Validated against KSA build version 2026.7.9.5018.
 - **AUTOSTAGE toggle button** on the BurnControl gauge panel
 - **Auto-burn continuation** - maintains BurnMode=Auto through staging so planned burns don't abort
 - **Cascade staging** - stages again if the next stage is empty or only has decouplers
+- **Spent stage drop** - sheds burnt-out boosters as soon as they quit, without waiting for the core stage to run dry
 - **Configurable staging delays** - independent delays for decouplers and engines, simulating realistic separation and engine spool-up time
 - **On-screen countdowns** - "Decouple in X.Xs" and "Ignition in X.Xs" alerts during a delayed stage so you can see what's about to happen
+
+## Spent Stage Drop
+
+A launch stage that mixes solid boosters with a liquid core does not run out of propellant all at once. The boosters burn out first, and the sequence that drops them exists precisely for that moment, but a staging trigger that waits for *every* active engine to go dry never fires while the core is still burning, so the empty booster casings ride along as dead mass.
+
+AutoStage therefore also stages when the next sequence would jettison nothing but burnt-out hardware. Before staging it works out which parts each decoupler in that sequence would separate, and only fires when:
+
+- the sequence activates no engine (so it cannot light the next stage early),
+- every active engine in the jettisoned parts is spent,
+- at least one engine that stays with the vehicle is still firing, and
+- nothing in the jettisoned parts is an engine that has never been activated.
+
+It also refuses when the parts to be jettisoned still hold propellant a retained engine can draw from, or when an enabled fuel link crosses the separation, so crossfeed setups are not cut off mid-burn.
+
+Besides the dead mass, this also fixes the burn estimate: the flight computer sums thrust and mass flow over every engine flagged active, whether or not it still has propellant, so a spent booster left attached makes a planned burn look shorter than it is.
+
+Vehicles without boosters never see a jettison that mixes spent and firing engines, so their staging is unchanged. Turn it off with "Drop spent stages early" in the settings window if you want staging to wait for a full burnout.
 
 ## Staging Delays
 
@@ -38,7 +56,7 @@ Set the decoupler delay shorter than the engine delay if you want the lower stag
 
 ### Configuration
 
-**Settings window (Settings > Mods > AutoStage Settings):** Two sections, "Engine Ignition Delays" and "Decoupler Delays". All known part variants are listed with an input field for the delay in seconds. Click "Save" to persist changes.
+**Settings window (Settings > Mods > AutoStage Settings):** A "Drop spent stages early" checkbox, then two sections, "Engine Ignition Delays" and "Decoupler Delays". All known part variants are listed with an input field for the delay in seconds. Every setting takes effect immediately; click "Save" to persist it.
 
 **Part Window (right-click part > Window):** Override the delay for a specific sequence on the current vehicle. Engines show "Ignition Delay", decouplers show "Decoupler Delay". Per-vehicle overrides take priority over the global config.
 
@@ -47,6 +65,9 @@ Set the decoupler delay shorter than the engine delay if you want the lower stag
 Global config is stored in `Documents\My Games\Kitten Space Agency\mods\AutoStage\autostage.toml`:
 
 ```toml
+[staging]
+drop_spent_stages = true
+
 [engine_delays]
 CorePropulsionA_Prefab_EngineA2 = 2.0
 CorePropulsionA_Prefab_EngineA3 = 5.0
@@ -95,8 +116,9 @@ Required only to build the mod from source. Targets **.NET 10**.
 - `autostage-api-drift` boots AutoStage's actual load path and checks every reflection target and the gauge enum injection against the current game build, so an update that breaks the mod is caught without flying anything.
 - `autostage-flight` flies a staged save at full manual throttle and asserts that AutoStage performs every further staging on its own.
 - `autostage-delays` measures that configured decoupler and engine ignition delays fire on time.
+- `autostage-spent-drop` flies a save whose launch stage mixes boosters with a core and asserts the boosters are shed as soon as they burn out, never earlier, and that the core is still firing afterwards.
 
-To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). The flying tests use the save named by `KSA_HEADLESS_VEHICLE` and skip when it is unset. Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
+To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). The flying tests use the save named by `KSA_HEADLESS_VEHICLE` and skip when it is unset; `autostage-spent-drop` instead takes its save from `-Vehicles` / `KSA_HEADLESS_VEHICLES` and defaults to "Test Vehicle with SRBs 1". Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
 
 ## Mod compatibility
 

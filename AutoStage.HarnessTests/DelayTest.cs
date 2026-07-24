@@ -64,6 +64,11 @@ public sealed class DelayTest : IHarnessTest
             VehicleUpdateTask._forceOffRails = true;
             Program.ControlledVehicle = vehicle;
 
+            // The measurement starts at first-stage burnout, so the early spent-stage drop has to
+            // stay out of it: on a save with boosters it would activate the decoupler sequence
+            // ahead of that. CleanupAfterFlight reloads the user's config.
+            Config.DropSpentStages = false;
+
             if (!TryFindDelaySequences(vehicle, out int decouplerSeq, out int engineSeq))
             {
                 HarnessLog.Line("[autostage-delays] SKIP: the save has no decoupler-only sequence " +

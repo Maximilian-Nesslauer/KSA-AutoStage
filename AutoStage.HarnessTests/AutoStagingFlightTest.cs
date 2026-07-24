@@ -59,9 +59,12 @@ public sealed class AutoStagingFlightTest : IHarnessTest
             Program.ControlledVehicle = vehicle;
 
             // Zero delays: this test asserts plain immediate auto-staging. The delay behaviour has
-            // its own test; CleanupAfterFlight reloads the user's config.
+            // its own test; CleanupAfterFlight reloads the user's config. The spent-stage drop is
+            // pinned to its shipped default so the end-to-end run covers the same behaviour a
+            // player gets, whatever the local config says.
             Core.Config.EngineDelays.Clear();
             Core.Config.DecouplerDelays.Clear();
+            Core.Config.DropSpentStages = Core.Config.DropSpentStagesDefault;
 
             int stagesLeft = CountUnactivatedSequences(vehicle);
             if (stagesLeft < 2)
