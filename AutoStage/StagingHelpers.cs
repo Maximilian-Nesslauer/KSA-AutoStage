@@ -8,14 +8,22 @@ static class StagingHelpers
     public static bool HasActiveEngineWithPropellant(Vehicle vehicle)
     {
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
+        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
         Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
             if (!engines[i].IsActive) continue;
             foreach (RocketCore core in engines[i].Cores)
-                if (core.ResourceManager != null
-                    && core.ResourceManager.ResourceAvailable(moleStates))
+            {
+                // isBurning mirrors Rocket.UpdateRockets: a core burns when its
+                // throttle is above zero. A lit SolidMotor then counts remaining
+                // grain as propellant, while a quenched motor falls back to the
+                // equilibrium-pressure check and reads as spent, so its unburnable
+                // grain sliver does not keep a burnt booster flagged active.
+                bool isBurning = coreStates[core.StatesIdx].Throttle > 0f;
+                if (core.ComputePropellantAvailable(moleStates, isBurning))
                     return true;
+            }
         }
         return false;
     }
