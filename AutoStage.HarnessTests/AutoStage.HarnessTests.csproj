@@ -17,7 +17,8 @@
     resolution), so every reference is Private=false and nothing is copied into the output. The
     HeadlessHarness HintPath expects its repo checked out as a sibling of this one and follows
     $(Configuration), so build the harness in the same configuration; adjust the path to your local
-    clone.
+    clone. The harness must be new enough that HeadlessSession.BringUp loads GrainGeometryLibrary,
+    otherwise any save with a solid motor throws "No grain geometries loaded" while deserializing.
   -->
   <ItemGroup>
     <ProjectReference Include="..\AutoStage\AutoStage.csproj">

@@ -16,7 +16,8 @@ namespace AutoStage;
 ///   Monitoring -> the next sequence would shed only spent engines -> stage
 ///
 ///   AwaitingIgnition:    one or both of (decoupler delay, engine delay) still running.
-///                        Tick both timers independently, fire parts when they hit 0.
+///                        Both deadlines are independent; fire each set when sim
+///                        time reaches it.
 ///   AwaitingPropagation: all pending parts fired; wait for worker to reflect
 ///                        the new propellant state. If it stays dry, cascade stage.
 ///   AwaitingPropagation -> new engines get propellant -> back to Monitoring
@@ -80,21 +81,34 @@ static class StagingDetectionPatch
 #if DEBUG
         long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
 #endif
+        // Bare return for the other vehicles: this postfix runs once per vehicle
+        // per frame, so touching the detector's state here would reset it before
+        // the controlled vehicle's own timers could ever elapse.
+        if (__instance != Program.ControlledVehicle)
+            return;
+
         if (!Mod.AutoStageEnabled)
         {
-            // Sim time keeps running while the mod is off, so a dwell left armed
-            // here would already be expired when it is switched back on and
-            // would stage on the first frame with no confirmation.
+            // A staging already committed keeps running to completion. Its
+            // sequence is marked activated and its parts are only waiting on a
+            // delay, so abandoning it here would leave them unfired for good,
+            // and switching the mod off means "stop deciding to stage", not
+            // "stop mid-separation".
+            if (_state == State.AwaitingIgnition)
+            {
+                TickPendingStaging(__instance, Universe.GetElapsedSeconds());
+                return;
+            }
+
+            // Everything else is dropped rather than frozen: sim time keeps
+            // running while the mod is off, so a dwell left armed here would
+            // already be expired on the frame it is switched back on.
+            _state = State.Monitoring;
+            _propagationFrames = 0;
             _spentJettisonSince = double.NaN;
             _spentJettisonBlocker = "";
             return;
         }
-
-        // Only a bare return for the other vehicles: this postfix runs once per
-        // vehicle per frame, so touching the detector's state here would reset
-        // it before the controlled vehicle's own dwell could ever elapse.
-        if (__instance != Program.ControlledVehicle)
-            return;
 
         if (_currentVehicle != __instance)
         {
@@ -150,7 +164,7 @@ static class StagingDetectionPatch
 
             case State.AwaitingIgnition:
                 MaintainBurnMode(fc);
-                TickPendingStaging(__instance, __instance.KinematicMeasurements.DeltaTime);
+                TickPendingStaging(__instance, Universe.GetElapsedSeconds());
                 break;
 
             case State.AwaitingPropagation:
@@ -281,7 +295,7 @@ static class StagingDetectionPatch
             : $"[AutoStage] Spent-stage drop held on '{vehicle.Id}': {blocker} ({detail}).");
     }
 
-    private static void TickPendingStaging(Vehicle vehicle, double deltaTime)
+    private static void TickPendingStaging(Vehicle vehicle, double now)
     {
         PendingStaging? p = _pendingStaging;
         if (p == null)
@@ -293,24 +307,16 @@ static class StagingDetectionPatch
             return;
         }
 
-        if (p.DecouplersPending)
+        if (p.DecouplersPending && now >= p.DecouplerDeadline)
         {
-            p.DecouplerRemaining -= deltaTime;
-            if (p.DecouplerRemaining <= 0.0)
-            {
-                StagingExecution.ActivatePendingParts(vehicle, p.DecouplerParts!, "decoupler");
-                p.ClearDecouplers();
-            }
+            StagingExecution.ActivatePendingParts(vehicle, p.DecouplerParts!, "decoupler");
+            p.ClearDecouplers();
         }
 
-        if (p.EnginesPending)
+        if (p.EnginesPending && now >= p.EngineDeadline)
         {
-            p.EngineRemaining -= deltaTime;
-            if (p.EngineRemaining <= 0.0)
-            {
-                StagingExecution.ActivatePendingParts(vehicle, p.EngineParts!, "engine");
-                p.ClearEngines();
-            }
+            StagingExecution.ActivatePendingParts(vehicle, p.EngineParts!, "engine");
+            p.ClearEngines();
         }
 
         if (!p.AnyPending)
@@ -345,19 +351,20 @@ static class StagingDetectionPatch
             _pendingStaging = pending;
             _state = State.AwaitingIgnition;
 
-            if (pending.DecouplersPending && pending.DecouplerRemaining > 0.0)
+            if (pending.DecouplersPending && pending.DecouplerDelay > 0.0)
                 TimedAlert.Create(
-                    $"Decouple in {pending.DecouplerRemaining:F1}s",
-                    Color.Yellow, pending.DecouplerRemaining);
-            if (pending.EnginesPending && pending.EngineRemaining > 0.0)
+                    $"Decouple in {pending.DecouplerDelay:F1}s",
+                    Color.Yellow, pending.DecouplerDelay);
+            if (pending.EnginesPending && pending.EngineDelay > 0.0)
                 TimedAlert.Create(
-                    $"Ignition in {pending.EngineRemaining:F1}s",
-                    Color.Yellow, pending.EngineRemaining);
+                    $"Ignition in {pending.EngineDelay:F1}s",
+                    Color.Yellow, pending.EngineDelay);
 
             DefaultCategory.Log.Info(
-                $"[AutoStage] Staging delay: decouplers={pending.DecouplerRemaining:F1}s " +
+                $"[AutoStage] Staging delay on '{vehicle.Id}': " +
+                $"decouplers={pending.DecouplerDelay:F1}s " +
                 $"({pending.DecouplerParts?.Count ?? 0}), " +
-                $"engines={pending.EngineRemaining:F1}s " +
+                $"engines={pending.EngineDelay:F1}s " +
                 $"({pending.EngineParts?.Count ?? 0})");
         }
         else

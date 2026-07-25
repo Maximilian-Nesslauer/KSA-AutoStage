@@ -122,14 +122,15 @@ static class StagingExecution
         // stock drain in Program.PrepareFrame runs a few ms later in the same
         // frame, after the foreach completes.
 
-        // part.ActivateInStage on engines flips IsActive=true directly, bypassing
-        // InputEvents.IActivateInputData and the VehicleFlightComputerReset queue
-        // it would otherwise enqueue. FlightComputer.VehicleConfig only counts
-        // IsActive=true engines, so without this refresh BurnTarget.BurnDuration
-        // stays 0 and Auto-burn flips back to Manual on the next UpdateBurnTarget
-        // tick. Decoupler activations get the refresh for free via Vehicle.Split;
-        // engine-only activations do not. Safe to call from the Postfix because
-        // UpdateAfterPartTreeModification does not touch Vehicle.UpdateTask.
+        // Kept defensively, not because the activation needs it: every IActivate
+        // here only appends to InputEvents.IActivateInputBuffer, so the tree is
+        // unchanged at this point and this recomputes the same values it already
+        // holds. It is not free either, since RecomputeSolidMotorStacks resizes
+        // every solid motor's nozzles. Removing it is the obvious cleanup, but
+        // nothing here covers the Auto-burn-through-staging path it was
+        // originally credited with, so that wants a deliberate test first.
+        // Safe to call from the Postfix because UpdateAfterPartTreeModification
+        // does not touch Vehicle.UpdateTask.
         vehicle.UpdateAfterPartTreeModification();
 
         bool anyPending = (pendingEngines != null && pendingEngines.Count > 0)
@@ -149,7 +150,8 @@ static class StagingExecution
 
         return new PendingStaging(vehicle,
             pendingDecouplers, decouplerDelay,
-            pendingEngines, engineDelay);
+            pendingEngines, engineDelay,
+            Universe.GetElapsedSeconds());
     }
 
     /// <summary>
@@ -178,9 +180,7 @@ static class StagingExecution
         vehicle.Parts.SequenceList.ResetCaches();
         StagingHelpers.InvalidateSequenceCache();
 
-        // Same FlightComputer.VehicleConfig refresh as ActivateNextSequenceSplit:
-        // delayed engine activation goes through part.ActivateInStage which does
-        // not propagate to VehicleConfig on its own.
+        // Same derived-data refresh as ActivateNextSequenceSplit.
         vehicle.UpdateAfterPartTreeModification();
     }
 
@@ -205,16 +205,25 @@ static class StagingExecution
 }
 
 /// <summary>
-/// Tracks parts waiting to fire after a staging delay. Decouplers and
-/// engines have independent countdowns measured from the staging trigger.
+/// Tracks parts waiting to fire after a staging delay. Decouplers and engines
+/// have independent deadlines, both measured from the staging trigger.
+///
+/// Deadlines in sim time rather than a countdown fed by
+/// Vehicle.KinematicMeasurements.DeltaTime: VehicleUpdateTask only skips the
+/// motion and physics passes at DeltaTime <= 0, so the detector's postfix keeps
+/// running over frozen state while the game is paused, and the last non-zero
+/// DeltaTime would keep draining the countdown there.
 /// </summary>
 class PendingStaging
 {
     public Vehicle Vehicle { get; }
     public List<Part>? DecouplerParts { get; private set; }
-    public double DecouplerRemaining { get; set; }
     public List<Part>? EngineParts { get; private set; }
-    public double EngineRemaining { get; set; }
+
+    public double DecouplerDelay { get; }
+    public double EngineDelay { get; }
+    public double DecouplerDeadline { get; }
+    public double EngineDeadline { get; }
 
     public bool DecouplersPending => DecouplerParts != null && DecouplerParts.Count > 0;
     public bool EnginesPending => EngineParts != null && EngineParts.Count > 0;
@@ -222,13 +231,15 @@ class PendingStaging
 
     public PendingStaging(Vehicle vehicle,
         List<Part>? decouplerParts, double decouplerDelay,
-        List<Part>? engineParts, double engineDelay)
+        List<Part>? engineParts, double engineDelay, double now)
     {
         Vehicle = vehicle;
         DecouplerParts = decouplerParts;
-        DecouplerRemaining = decouplerDelay;
         EngineParts = engineParts;
-        EngineRemaining = engineDelay;
+        DecouplerDelay = decouplerDelay;
+        EngineDelay = engineDelay;
+        DecouplerDeadline = now + decouplerDelay;
+        EngineDeadline = now + engineDelay;
     }
 
     public void ClearDecouplers() => DecouplerParts = null;
