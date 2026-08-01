@@ -37,7 +37,8 @@ public sealed class ApiDriftTest : IHarnessTest
                 "SequenceList.ActivateNextSequence")
             & CheckPatched(AccessTools.Method(typeof(SequenceList), nameof(SequenceList.ResetCaches)),
                 "SequenceList.ResetCaches")
-            & CheckPatched(GameReflection.Vehicle_UpdateFromTaskResults, "Vehicle.UpdateFromTaskResults");
+            & CheckPatched(GameReflection.Vehicle_UpdateFromTaskResults, "Vehicle.UpdateFromTaskResults")
+            & CheckPatched(GameReflection.Vehicle_Dispose, "Vehicle.Dispose(bool)");
 
         bool ok = coreOk && delayOk && enumOk && patchesOk;
         HarnessLog.Line($"[autostage-api-drift] {TestSupport.Verdict(ok)}");

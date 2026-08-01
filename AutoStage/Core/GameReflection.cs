@@ -30,6 +30,11 @@ static class GameReflection
     public static readonly FieldInfo? ModLibrary_AllParts =
         AccessTools.Field(typeof(ModLibrary), "AllParts");
 
+    // Pinned to the bool overload: Dispose() only delegates to it, and the EVA-boarding
+    // path calls Dispose(endMission: false) directly, so the delegate misses that vehicle.
+    public static readonly MethodInfo? Vehicle_Dispose =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
+
     public static bool ValidateAll()
     {
         var targets = new (string name, object? target)[]
@@ -60,6 +65,7 @@ static class GameReflection
         {
             ("SequenceList._updatingSequence", SequenceList_updatingSequence),
             ("ModLibrary.AllParts", ModLibrary_AllParts),
+            ("Vehicle.Dispose(bool)", Vehicle_Dispose),
         };
 
         bool allOk = true;
