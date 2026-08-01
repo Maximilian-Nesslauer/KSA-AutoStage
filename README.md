@@ -114,11 +114,11 @@ Required only to build the mod from source. Targets **.NET 10**.
 `AutoStage.HarnessTests/` is a developer-only test suite for [HeadlessHarness](https://github.com/Maximilian-Nesslauer/KSA-HeadlessHarness), which brings the real game up GPU-free and runs plug-in tests against the live simulation:
 
 - `autostage-api-drift` boots AutoStage's actual load path and checks every reflection target and the gauge enum injection against the current game build, so an update that breaks the mod is caught without flying anything.
-- `autostage-flight` flies a staged save at full manual throttle and asserts that AutoStage performs every further staging on its own.
+- `autostage-flight` flies a staged save at full manual throttle and asserts that AutoStage activates every remaining engine sequence on its own and that each one actually lights. A trailing decoupler-only sequence is left standing on purpose, since AutoStage only stages while an engine is still ahead.
 - `autostage-delays` measures that configured decoupler and engine ignition delays fire on time.
 - `autostage-spent-drop` flies a save whose launch stage mixes boosters with a core and asserts the boosters are shed as soon as they burn out, never earlier, and that the core is still firing afterwards.
 
-To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). The flying tests use the save named by `KSA_HEADLESS_VEHICLE` and skip when it is unset; `autostage-spent-drop` instead takes its save from `-Vehicles` / `KSA_HEADLESS_VEHICLES` and defaults to "Test Vehicle with SRBs 1". Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
+To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). The flying tests use the save named by `KSA_HEADLESS_VEHICLE` and skip when it is unset; `autostage-spent-drop` instead takes its save from `-Vehicles` / `KSA_HEADLESS_VEHICLES` and defaults to "Test Vehicle 1". That default is the only end-to-end cover of the jettison analysis, so it fails rather than skips when the save is missing: provide a save whose launch stage mixes boosters with a core under that name, or name a substitute in `KSA_HEADLESS_VEHICLES`. Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
 
 ## Mod compatibility
 

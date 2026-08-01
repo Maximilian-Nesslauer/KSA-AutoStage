@@ -67,16 +67,6 @@ internal static class AutoStageHost
         driver.Step(1.0);
     }
 
-    public static bool IsSequenceActivated(Vehicle vehicle, int number)
-    {
-        foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
-        {
-            if (seq.Number == number)
-                return seq.Activated;
-        }
-        return true; // a sequence that no longer exists cannot be waiting to activate
-    }
-
     // Undo everything a flying test changed globally, so later tests (including the harness's own)
     // see a clean session: control released, mod disabled, state machine and in-memory config back
     // to their loaded state, and every vehicle the test spawned or shed despawned.

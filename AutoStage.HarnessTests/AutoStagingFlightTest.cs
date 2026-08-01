@@ -6,9 +6,11 @@ namespace AutoStage.HarnessTests;
 
 // The end-to-end scenario: spawn a staged save into a circular orbit clear of the home body, light
 // the first stage like a player, then hold full manual throttle and let AutoStage perform every
-// further staging on its own (including cascading through decoupler-only sequences). Passes when
-// the sequence list is spent and the vehicle ends dry without a single manual staging call, still
-// on an orbit that does not intersect the home body.
+// further staging on its own (including cascading through decoupler-only sequences). Passes when no
+// unactivated sequence carrying an engine is left, every engine sequence that activated was seen
+// producing thrust, and the vehicle ends dry without a single manual staging call, still on an orbit
+// that does not intersect the home body. A trailing decoupler-only sequence is left standing on
+// purpose: AutoStage only stages while an engine is still ahead, so that is a valid end state.
 //
 // The vehicle comes from KSA_HEADLESS_VEHICLE (shared with the harness flight test); unset skips.
 public sealed class AutoStagingFlightTest : IHarnessTest
@@ -92,43 +94,77 @@ public sealed class AutoStagingFlightTest : IHarnessTest
             double startMass = vehicle.TotalMass;
             double mu = vehicle.Orbit.Parent.Mu;
             double startEnergy = Orbit.GetOrbitalEnergy(in vehicle.Orbit.StateVectors, mu);
-            int lastNext = vehicle.Parts.SequenceList.GetNextSequenceNumber();
+            // Sequence objects, not GetNextSequenceNumber: SequenceList.Remove decrements every
+            // number at or above a removed sequence and RemoveSpentSequences runs inside
+            // Vehicle.Split, so the reported next number moves without anything being staged, and
+            // can even move backwards. Activated is not a latch either (SetActiveSequence rewrites
+            // it across the whole list), so the running count only ever moves up.
+            List<Sequence> pending = CollectUnactivatedSequences(vehicle);
             int autoActivations = 0;
             int elapsed = 0;
             int dryStreak = 0;
+            int engineSeqsLeft = RemainingEngineSequences(vehicle);
+            // Set when a sequence carrying an engine activates, cleared once the vehicle is seen
+            // producing thrust again. Without it, "no engine sequence left and not fueled" would
+            // accept a flight where every remaining stage was marked activated and none ever lit,
+            // and HasActiveEngineWithPropellant dips to false on its own while a solid motor is
+            // quenched, so a transient alone could end the flight.
+            bool awaitingThrust = false;
             while (elapsed < MaxFlightSeconds)
             {
                 driver.Step(1.0);
                 elapsed++;
-                int next = vehicle.Parts.SequenceList.GetNextSequenceNumber();
-                if (next != lastNext)
+                int activated = CountActivated(pending);
+                while (autoActivations < activated)
                 {
                     autoActivations++;
                     HarnessLog.Line($"[autostage-flight] auto staging {autoActivations} at t={elapsed}s " +
-                                    $"(next sequence {next}, mass={vehicle.TotalMass:F1}kg).");
-                    lastNext = next;
+                                    $"(next sequence {vehicle.Parts.SequenceList.GetNextSequenceNumber()}, " +
+                                    $"mass={vehicle.TotalMass:F1}kg).");
                 }
-                dryStreak = next == -1 && !StagingHelpers.HasActiveEngineWithPropellant(vehicle) ? dryStreak + 1 : 0;
+
+                int engineSeqsNow = RemainingEngineSequences(vehicle);
+                if (engineSeqsNow < engineSeqsLeft)
+                {
+                    awaitingThrust = true;
+                    engineSeqsLeft = engineSeqsNow;
+                }
+                bool fueled = StagingHelpers.HasActiveEngineWithPropellant(vehicle);
+                if (fueled)
+                    awaitingThrust = false;
+
+                dryStreak = (engineSeqsNow == 0 && !fueled && !awaitingThrust) ? dryStreak + 1 : 0;
                 if (dryStreak >= DrySteps)
                     break;
             }
 
             bool dry = !StagingHelpers.HasActiveEngineWithPropellant(vehicle);
             int remaining = vehicle.Parts.SequenceList.GetNextSequenceNumber();
+            int remainingEngineSeqs = RemainingEngineSequences(vehicle);
             if (elapsed >= MaxFlightSeconds)
             {
                 HarnessLog.Line($"[autostage-flight] FAIL: guard hit after {MaxFlightSeconds}s " +
                                 $"(next sequence {remaining}, {(dry ? "dry" : "still burning")}).");
                 ok = false;
             }
-            if (remaining != -1)
+            // Not "every sequence activated": AutoStage only stages while a sequence carrying an
+            // engine is still ahead, so a trailing decoupler-only sequence is left standing by
+            // design and is a valid end state. What must be gone is anything that could still light.
+            if (remainingEngineSeqs != 0)
             {
-                HarnessLog.Line($"[autostage-flight] FAIL: flight ended with sequence {remaining} never auto-activated.");
+                HarnessLog.Line($"[autostage-flight] FAIL: flight ended with {remainingEngineSeqs} engine " +
+                                $"sequence(s) never auto-activated (next sequence {remaining}).");
                 ok = false;
             }
             if (autoActivations < 1)
             {
                 HarnessLog.Line("[autostage-flight] FAIL: no automatic staging was observed.");
+                ok = false;
+            }
+            if (awaitingThrust)
+            {
+                HarnessLog.Line("[autostage-flight] FAIL: the last auto-staged engine sequence never " +
+                                "produced thrust; its parts were marked activated but nothing lit.");
                 ok = false;
             }
             if (vehicle.TotalMass >= startMass)
@@ -166,12 +202,48 @@ public sealed class AutoStagingFlightTest : IHarnessTest
     }
 
     private static int CountUnactivatedSequences(Vehicle vehicle)
+        => CollectUnactivatedSequences(vehicle).Count;
+
+    private static List<Sequence> CollectUnactivatedSequences(Vehicle vehicle)
+    {
+        List<Sequence> result = new();
+        foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
+        {
+            if (!seq.Activated && !seq.Parts.IsEmpty)
+                result.Add(seq);
+        }
+        return result;
+    }
+
+    private static int CountActivated(List<Sequence> sequences)
+    {
+        int count = 0;
+        foreach (Sequence seq in sequences)
+        {
+            if (seq.Activated)
+                count++;
+        }
+        return count;
+    }
+
+    // Sequences AutoStage could still stage for: it only fires while an unactivated sequence
+    // carrying an engine is ahead of the vehicle.
+    private static int RemainingEngineSequences(Vehicle vehicle)
     {
         int count = 0;
         foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
         {
-            if (!seq.Activated && !seq.Parts.IsEmpty)
-                count++;
+            if (seq.Activated || seq.Parts.IsEmpty)
+                continue;
+            ReadOnlySpan<Part> parts = seq.Parts;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (parts[i].HasAny<EngineController>())
+                {
+                    count++;
+                    break;
+                }
+            }
         }
         return count;
     }

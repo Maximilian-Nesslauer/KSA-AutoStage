@@ -10,12 +10,12 @@ namespace AutoStage.HarnessTests;
 // boosters the moment they burn out, while the core keeps firing. The all-engines-dry trigger never
 // sees an edge here, so this is the only thing that proves the jettison analysis works end to end.
 //
-// Needs a save whose launch sequence has engines on both sides of the next sequence's decouplers
-// (the "Test Vehicle with SRBs 1" layout); any other save skips. The candidate is resolved through
-// TestSupport.ResolveVehicleSaves, so KSA_HEADLESS_VEHICLES overrides it.
+// Needs a save whose launch sequence has engines on both sides of the next sequence's decouplers,
+// i.e. boosters that burn out while a core keeps firing; any other save skips. The candidate is
+// resolved through TestSupport.ResolveVehicleSaves, so KSA_HEADLESS_VEHICLES overrides it.
 public sealed class SpentStageDropTest : IHarnessTest
 {
-    private const string DefaultSave = "Test Vehicle with SRBs 1";
+    private const string DefaultSave = "Test Vehicle 1";
     private const double BurnDt = 1.0;
     private const double ReactionDt = 0.25;
     private const double MaxBurnSeconds = 900.0;
@@ -34,18 +34,28 @@ public sealed class SpentStageDropTest : IHarnessTest
             return 1;
         }
 
-        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSave);
-        if (saves.Count == 0)
-        {
-            HarnessLog.Line($"[autostage-spent-drop] SKIP: no candidate save available (default '{DefaultSave}').");
-            return 0;
-        }
-
         // The built-in default is known to have a mixed launch stage, so it being rejected means
         // the analysis lost its grip on the game build, not that the save is unsuitable. Only an
         // operator-supplied save list is allowed to skip.
         bool defaultOnly = string.IsNullOrWhiteSpace(
             Environment.GetEnvironmentVariable(TestSupport.VehiclesEnvVar));
+
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSave);
+        if (saves.Count == 0)
+        {
+            // Passing here would report the only end-to-end cover of the jettison analysis as green
+            // while it ran nothing at all. A missing default is lost coverage, not a valid run.
+            if (defaultOnly)
+            {
+                HarnessLog.Line($"[autostage-spent-drop] FAIL: the default save '{DefaultSave}' is not in " +
+                                "the game's Vehicles folder, so the spent-stage drop was not exercised. " +
+                                $"Recreate it, or name a substitute in {TestSupport.VehiclesEnvVar}.");
+                return 1;
+            }
+            HarnessLog.Line($"[autostage-spent-drop] SKIP: none of the saves named in " +
+                            $"{TestSupport.VehiclesEnvVar} are available.");
+            return 0;
+        }
 
         foreach (string saveId in saves)
         {
