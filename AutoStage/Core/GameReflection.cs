@@ -35,6 +35,28 @@ static class GameReflection
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
 
+    // Which settings page the nav rail has open. The enum is private to
+    // GameSettings, so the Mods member is resolved as a boxed value once and
+    // compared by equality rather than named in code.
+    public static readonly FieldInfo? GameSettings_openTab =
+        AccessTools.Field(typeof(GameSettings), "_openTab");
+
+    private static readonly object? ModsTab = ResolveModsTab();
+
+    public static bool IsModsSettingsPageOpen()
+    {
+        FieldInfo? field = GameSettings_openTab;
+        return ModsTab != null && field != null && ModsTab.Equals(field.GetValue(null));
+    }
+
+    private static object? ResolveModsTab()
+    {
+        Type? type = GameSettings_openTab?.FieldType;
+        if (type == null || !type.IsEnum)
+            return null;
+        return Enum.TryParse(type, "Mods", out object? value) ? value : null;
+    }
+
     public static bool ValidateAll()
     {
         var targets = new (string name, object? target)[]
@@ -44,6 +66,9 @@ static class GameReflection
             ("Vehicle.IsSet<Enum>", Vehicle_IsSet_Enum),
             ("Vehicle.IsFlightComputerDisabled<Enum>", Vehicle_IsFlightComputerDisabled_Enum),
             ("SequenceList.ActiveSequence", SequenceList_ActiveSequence),
+            // Core, not IgnitionDelay: the settings page carries the spent-stage
+            // switch, which uses none of the ignition-delay targets.
+            ("GameSettings._openTab (Mods page)", ModsTab),
         };
 
         bool allOk = true;

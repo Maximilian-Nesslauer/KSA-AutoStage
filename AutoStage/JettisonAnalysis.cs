@@ -221,11 +221,16 @@ static class JettisonAnalysis
     {
         root = null;
 
-        // Decoupler.IsActive never flips (InputEvents applies ActivateOp.Decouple
-        // straight to Decoupler.Decouple), so a spent decoupler is recognised by
-        // its connector having lost the connection, which is the same guard
-        // Decoupler.SetIsActive uses before queueing a decouple. Firing it again
-        // separates nothing.
+        // Both checks mirror the guard Decoupler.SetIsActive applies before it
+        // queues a decouple, so the predicted set matches what staging would
+        // really shed. A disabled decoupler is the player turning an adapter
+        // into a static fairing; it stays attached. Decoupler.IsActive never
+        // flips (InputEvents applies ActivateOp.Decouple straight to
+        // Decoupler.Decouple), so a spent one is recognised by its connector
+        // having lost the connection. Firing either again separates nothing.
+        if (!decoupler.IsEnabled)
+            return Separation.None;
+
         Part.Connection? connection = decoupler.Connector.Connection;
         if (connection == null)
             return Separation.None;

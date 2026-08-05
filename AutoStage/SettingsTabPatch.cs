@@ -12,118 +12,93 @@ using KSA;
 namespace AutoStage;
 
 /// <summary>
-/// Injects AutoStage settings into the Mods tab of the game's Settings window.
+/// Injects AutoStage settings into the Mods page of the game's Settings window.
 ///
-/// The Mods tab uses BeginRegionTab which creates a child window with a 2-column
-/// layout for the mod list. We replace the Mods tab's EndRegionTab call with our
-/// own method that resets the columns, draws our settings (still inside the child
-/// window), then closes everything normally.
+/// The settings window has no tab bar any more; it is a nav rail whose pages all
+/// render into one body child, closed by a single ConsoleStyle.PopWidgetStyle.
+/// Inserting the drawer call before that is enough to land inside the body with
+/// the console widget style still pushed, and it composes with any other mod
+/// doing the same because nothing is replaced. The drawer itself checks which
+/// page is open, since the whole body is one code path now.
 /// </summary>
 [HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi))]
 static class SettingsTabPatch
 {
-    // Assumes Mods is the last tab, so the closest EndRegionTab before
-    // EndTabBar is the one to swap.
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
         var codes = new List<CodeInstruction>(instructions);
-        MethodInfo endTabBar = AccessTools.Method(typeof(ImGui), nameof(ImGui.EndTabBar));
-        MethodInfo endRegionTab = AccessTools.Method(typeof(ImGuiHelper), nameof(ImGuiHelper.EndRegionTab));
-        MethodInfo replacement = AccessTools.Method(typeof(SettingsTabPatch), nameof(EndModsTabWithSettings));
+        MethodInfo? anchor = AccessTools.Method(typeof(ConsoleStyle),
+            nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
+        MethodInfo drawer = AccessTools.Method(typeof(SettingsTabPatch), nameof(DrawSettingsPage));
 
-        int endTabBarIdx = -1;
-        for (int i = codes.Count - 1; i >= 0; i--)
+        if (anchor == null)
         {
-            if (codes[i].Calls(endTabBar))
+            DefaultCategory.Log.Warning(
+                "[AutoStage] Transpiler: ConsoleStyle.PopWidgetStyle not found; "
+                + "settings page not patched.");
+            return codes;
+        }
+
+        int anchorIdx = -1;
+        for (int i = 0; i < codes.Count; i++)
+        {
+            if (codes[i].Calls(anchor))
             {
-                endTabBarIdx = i;
+                anchorIdx = i;
                 break;
             }
         }
 
-        if (endTabBarIdx < 0)
+        if (anchorIdx < 0)
         {
             DefaultCategory.Log.Warning(
-                "[AutoStage] Transpiler: EndTabBar not found in GameSettings.OnDrawUi");
+                $"[AutoStage] Transpiler: no ConsoleStyle.PopWidgetStyle() call in "
+                + $"GameSettings.OnDrawUi ({codes.Count} IL instructions scanned); "
+                + "settings page not patched.");
             return codes;
         }
 
-        int swapIdx = -1;
-        int endRegionTabsAfterSwap = 0;
-        for (int i = endTabBarIdx - 1; i >= 0; i--)
-        {
-            if (!codes[i].Calls(endRegionTab))
-                continue;
-
-            if (swapIdx < 0)
-                swapIdx = i;
-            else
-                endRegionTabsAfterSwap++;
-        }
-
-        if (swapIdx < 0)
-        {
-            DefaultCategory.Log.Warning(
-                "[AutoStage] Transpiler: EndRegionTab not found before EndTabBar");
-            return codes;
-        }
-
-        codes[swapIdx] = new CodeInstruction(OpCodes.Call, replacement)
-            .MoveLabelsFrom(codes[swapIdx]);
-
-        if (endRegionTabsAfterSwap == 0)
-            DefaultCategory.Log.Warning(
-                "[AutoStage] Transpiler: only one EndRegionTab found in "
-                + "GameSettings.OnDrawUi. Mods tab is expected to be the last "
-                + "of several tabs. Swap may be targeting the wrong tab.");
-
+        // Insert, do not replace: labels stay on the anchor so a jump to it
+        // skips the drawer rather than landing mid-call.
+        codes.Insert(anchorIdx, new CodeInstruction(OpCodes.Call, drawer));
         return codes;
     }
 
-    public static void EndModsTabWithSettings(bool alsoEndRegion)
+    public static void DrawSettingsPage()
     {
-        // Reset the 2-column layout from the mod list so our content spans full width.
-        // We're still inside the child window created by BeginRegionTab.
-        ImGui.Columns();
+        if (!GameReflection.IsModsSettingsPageOpen())
+            return;
 
         try
         {
-            if (ImGui.CollapsingHeader("AutoStage Settings"u8, ImGuiTreeNodeFlags.DefaultOpen))
-                DrawAutoStageSettings();
+            ConsoleWidgets.Rule();
+            ConsoleWidgets.RegionHeader("AUTOSTAGE".AsSpan());
+            DrawAutoStageSettings();
         }
         catch (Exception ex)
         {
             LogHelper.ErrorOnce("Settings.Draw",
                 $"[AutoStage] Settings draw error: {ex.Message}");
         }
-
-        // Original EndRegionTab logic: close region (Columns + EndChild) + EndTabItem
-        if (alsoEndRegion)
-            ImGuiHelper.EndRegion();
-        ImGui.EndTabItem();
     }
 
     private static void DrawAutoStageSettings()
     {
-        ImGui.Indent();
-
         // Takes effect immediately; the Save button below writes it to disk,
         // same as the delay tables.
         bool dropSpentStages = Config.DropSpentStages;
-        if (ImGui.Checkbox("Drop spent stages early"u8, ref dropSpentStages))
+        ConsoleWidgets.BeginRow("DROP SPENT STAGES EARLY".AsSpan());
+        if (ConsoleWidgets.Checkbox("AutoStageDropSpent".AsSpan(), ref dropSpentStages, pending: false))
             Config.DropSpentStages = dropSpentStages;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Stage as soon as the next sequence would shed nothing but burnt-out engines, so spent boosters drop while the core stage keeps firing. Off: staging waits until every active engine is dry."u8);
-
-        ImGui.Spacing();
-        ImGui.Spacing();
+        if (ConsoleWidgets.RowHovered)
+            ConsoleWidgets.Tooltip("Stage as soon as the next sequence would shed nothing but burnt-out engines, so spent boosters drop while the core stage keeps firing. Off: staging waits until every active engine is dry.".AsSpan());
+        ConsoleWidgets.EndRow();
 
         // The delay tables need the part library and the sequence internals the
         // ignition-delay reflection resolves; the checkbox above does not.
         if (!Mod.IgnitionDelayAvailable)
         {
             ImGui.TextDisabled("(delay settings unavailable on this game build)"u8);
-            ImGui.Unindent();
             return;
         }
 
@@ -131,7 +106,6 @@ static class SettingsTabPatch
             "Per-part-variant delays in seconds. Both delays are measured " +
             "from the staging trigger, so set decoupler delay shorter than " +
             "engine delay if you want the decoupler to fire first.");
-        ImGui.Spacing();
         ImGui.Spacing();
 
         List<PartInfo> engines = GetKnownParts(
@@ -146,7 +120,6 @@ static class SettingsTabPatch
                 set: (id, v) => Config.EngineDelays[id] = v);
         }
 
-        ImGui.Spacing();
         if (ImGui.CollapsingHeader("Decoupler Delays"u8, ImGuiTreeNodeFlags.DefaultOpen))
         {
             DrawDelayTable(decouplers, "dec",
@@ -155,13 +128,11 @@ static class SettingsTabPatch
         }
 
         ImGui.Spacing();
-        if (ImGui.Button("Save"u8, (float2?)null))
+        if (ConsoleWidgets.Button("SAVE".AsSpan()))
         {
             Config.SaveGlobalConfig();
             TimedAlert.Create("AutoStage config saved", Color.Green, 2.0);
         }
-
-        ImGui.Unindent();
     }
 
     private static void DrawDelayTable(List<PartInfo> parts, string idPrefix,
@@ -173,27 +144,19 @@ static class SettingsTabPatch
             return;
         }
 
-        // Find the longest display name to align the input fields
-        float maxNameWidth = 0f;
-        foreach (PartInfo p in parts)
-        {
-            float w = ImGui.CalcTextSize(p.DisplayName).X;
-            if (w > maxNameWidth) maxNameWidth = w;
-        }
-        float indentOffset = ImGui.GetCursorPosX();
-        float inputX = indentOffset + maxNameWidth + 15f;
-
+        // The row lays the label and control out like every other settings row;
+        // the field itself stays an InputFloat so typing an exact delay and the
+        // step buttons keep working, which a drag control would take away.
         foreach (PartInfo p in parts)
         {
             float delay = (float)get(p.TemplateId);
 
-            ImGui.Text(p.DisplayName);
-            ImGui.SameLine(inputX);
-            ImGui.SetNextItemWidth(130f);
-
+            ConsoleWidgets.BeginRow(p.DisplayName.AsSpan());
+            ImGui.SetNextItemWidth(ConsoleWidgets.RowControlWidth);
             string inputId = $"###{idPrefix}_{p.TemplateId}";
             if (ImGui.InputFloat(inputId, ref delay, 0.1f, 1.0f, "%.1f"))
                 set(p.TemplateId, Math.Max(0.0, (double)delay));
+            ConsoleWidgets.EndRow();
         }
     }
 
