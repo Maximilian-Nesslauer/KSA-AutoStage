@@ -10,18 +10,18 @@ Activates the next sequence whenever active engines run out of propellant, and d
     <th align="center">With AutoStage</th>
   </tr>
   <tr valign="top">
-    <td><img src="images/stock.png" alt="Stock BurnControl panel" width="420" /></td>
-    <td><img src="images/autostage.png" alt="BurnControl panel with AUTOSTAGE toggle" width="420" /></td>
+    <td><img src="images/stock.png" alt="Stock engine gauge panel" width="420" /></td>
+    <td><img src="images/autostage.png" alt="Engine gauge panel with AUTOSTAGE toggle" width="420" /></td>
   </tr>
 </table>
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.8.5.5168.
+Validated against KSA build version 2026.8.19.5261.
 
 ## Features
 
-- **AUTOSTAGE toggle button** on the BurnControl gauge panel
+- **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS
 - **Auto-burn continuation** - maintains BurnMode=Auto through staging so planned burns don't abort
 - **Cascade staging** - stages again if the next stage is empty or only has decouplers
 - **Spent stage drop** - sheds burnt-out boosters as soon as they quit, without waiting for the core stage to run dry

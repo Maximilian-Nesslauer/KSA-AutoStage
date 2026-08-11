@@ -41,23 +41,25 @@ public sealed class AutoStagingFlightTest : IHarnessTest
 
         CelestialSystem system = session.System;
         HashSet<string> preexisting = TestSupport.CollectVehicleIds(system);
-        Vehicle vehicle;
-        Astronomical homeBody;
-        try
-        {
-            vehicle = AutoStageHost.SpawnFromSave(session, saveId, "AutoStageFlight", out homeBody);
-        }
-        catch (InvalidOperationException e)
-        {
-            HarnessLog.Line($"[autostage-flight] FAIL: {e.Message}");
-            return 1;
-        }
-
         SimDriver driver = session.CreateDriver();
         bool ok = true;
         try
         {
-            VehicleUpdateTask._forceOffRails = true;
+            // Inside the try: Astronomical's constructor registers with the system before the
+            // spawner finishes, so a throw part-way still leaves a vehicle for cleanup to remove.
+            Vehicle vehicle;
+            Astronomical homeBody;
+            try
+            {
+                vehicle = AutoStageHost.SpawnFromSave(session, saveId, "AutoStageFlight", out homeBody);
+            }
+            catch (InvalidOperationException e)
+            {
+                HarnessLog.Line($"[autostage-flight] FAIL: {e.Message}");
+                return 1;
+            }
+
+            PhysicsBubble._forceOffRails = true;
             Program.ControlledVehicle = vehicle;
 
             // Zero delays: this test asserts plain immediate auto-staging. The delay behaviour has
@@ -83,7 +85,7 @@ public sealed class AutoStagingFlightTest : IHarnessTest
                 return 1;
             }
 
-            AutoStageHost.HoldProgradeFullThrottle(vehicle);
+            AutoStageHost.HoldPrograde(vehicle);
             AutoStageHost.IgniteFirstStage(vehicle, driver);
             if (!StagingHelpers.HasActiveEngineWithPropellant(vehicle))
             {

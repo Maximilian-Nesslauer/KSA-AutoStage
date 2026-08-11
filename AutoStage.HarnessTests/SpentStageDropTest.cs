@@ -99,7 +99,7 @@ public sealed class SpentStageDropTest : IHarnessTest
                 return 1;
             }
 
-            VehicleUpdateTask._forceOffRails = true;
+            PhysicsBubble._forceOffRails = true;
             Program.ControlledVehicle = vehicle;
 
             // Zero delays so the measured reaction is the detector's, not a configured countdown.
@@ -116,7 +116,7 @@ public sealed class SpentStageDropTest : IHarnessTest
                 return 1;
             }
 
-            AutoStageHost.HoldProgradeFullThrottle(vehicle);
+            AutoStageHost.HoldPrograde(vehicle);
 
             // Fly with a stale BurnTarget aboard, which is what a save carries when a burn was
             // removed from the plan after the flight computer had already accumulated delta-V

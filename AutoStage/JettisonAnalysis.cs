@@ -263,6 +263,12 @@ static class JettisonAnalysis
         }
     }
 
+    internal static void ForgetVehicle(Vehicle vehicle)
+    {
+        if (_cachedVehicle == vehicle)
+            Reset();
+    }
+
     internal static void Reset()
     {
         _jettisonSet.Clear();

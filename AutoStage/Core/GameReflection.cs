@@ -10,9 +10,6 @@ static class GameReflection
     public static readonly FieldInfo? GaugeButton_EnumTypes =
         AccessTools.Field(typeof(GaugeButtonFlightComputer), "EnumTypes");
 
-    public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
-        AccessTools.Method(typeof(Vehicle), "UpdateFromTaskResults");
-
     // Closed against System.Enum because PackData calls them on _enumValue
     // typed as Enum.
     public static readonly MethodInfo? Vehicle_IsSet_Enum =
@@ -62,13 +59,21 @@ static class GameReflection
         var targets = new (string name, object? target)[]
         {
             ("GaugeButtonFlightComputer.EnumTypes", GaugeButton_EnumTypes),
-            ("Vehicle.UpdateFromTaskResults", Vehicle_UpdateFromTaskResults),
             ("Vehicle.IsSet<Enum>", Vehicle_IsSet_Enum),
             ("Vehicle.IsFlightComputerDisabled<Enum>", Vehicle_IsFlightComputerDisabled_Enum),
             ("SequenceList.ActiveSequence", SequenceList_ActiveSequence),
+            // Core, not IgnitionDelay: every auto-stage runs the split
+            // activation, and stock brackets its own activation loop with this
+            // flag because SequenceList.ResetCaches early-returns on it. Without
+            // it the loop iterates target.Parts while a re-entrant ResetCaches
+            // is free to rebuild that cache.
+            ("SequenceList._updatingSequence", SequenceList_updatingSequence),
             // Core, not IgnitionDelay: the settings page carries the spent-stage
             // switch, which uses none of the ignition-delay targets.
             ("GameSettings._openTab (Mods page)", ModsTab),
+            // Core, not IgnitionDelay: the disposal hook drops the per-vehicle
+            // caches every feature builds, not just the delay overrides.
+            ("Vehicle.Dispose(bool)", Vehicle_Dispose),
         };
 
         bool allOk = true;
@@ -88,9 +93,7 @@ static class GameReflection
     {
         var targets = new (string name, object? target)[]
         {
-            ("SequenceList._updatingSequence", SequenceList_updatingSequence),
             ("ModLibrary.AllParts", ModLibrary_AllParts),
-            ("Vehicle.Dispose(bool)", Vehicle_Dispose),
         };
 
         bool allOk = true;

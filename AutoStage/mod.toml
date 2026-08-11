@@ -1,5 +1,5 @@
 name = "AutoStage"
-patches = [ "Patches/BurnControlPatch.xml" ]
+patches = [ "Patches/EngineControlPatch.xml" ]
 
 [StarMap]
 EntryAssembly = "AutoStage"

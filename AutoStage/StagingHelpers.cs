@@ -153,6 +153,15 @@ static class StagingHelpers
         return false;
     }
 
+    internal static void ForgetVehicle(Vehicle vehicle)
+    {
+        if (_cachedVehicle != vehicle)
+            return;
+        _cachedVehicle = null;
+        _cachedGeneration = -1;
+        _cachedHasNextEngineSequence = false;
+    }
+
     internal static void Reset()
     {
         _cachedVehicle = null;

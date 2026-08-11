@@ -26,6 +26,8 @@ static class Patch_ToggleEnum
     }
 }
 
+// KittenEva overrides this and forwards anything that is not a KittenEvaAction
+// to base, so the patch still answers for an EVA kitten.
 [HarmonyPatch]
 static class Patch_IsSet
 {
@@ -40,6 +42,10 @@ static class Patch_IsSet
     }
 }
 
+// Unlike IsSet, KittenEva's override answers "disabled" for everything that is
+// not a KittenEvaAction instead of calling base, so this never runs for an EVA
+// kitten. That is the wanted answer anyway, and the AUTOSTAGE button rides on a
+// canvas an EVA kitten does not draw.
 [HarmonyPatch]
 static class Patch_IsFlightComputerDisabled
 {

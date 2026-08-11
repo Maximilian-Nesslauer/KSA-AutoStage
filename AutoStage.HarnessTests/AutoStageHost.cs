@@ -43,17 +43,22 @@ internal static class AutoStageHost
         if (system.HomeBody is not IParentBody home || home is not Astronomical body)
             throw new InvalidOperationException("the loaded system has no home body to orbit.");
         homeBody = body;
-        Orbit orbit = VehicleSpawner.CircularCci(home, body.MeanRadius + SpawnAltitudeM, Universe.GetElapsedSimTime());
+        Orbit orbit = VehicleSpawner.CircularCci(home, body.MeanRadius + SpawnAltitudeM, Universe.GetElapsedTime());
         return VehicleSpawner.SpawnFromSave(saveId, system, home, id, orbit);
     }
 
-    // Full manual throttle with the flight computer holding prograde (the navball prograde track a
+    // Manual throttle with the flight computer holding prograde (the navball prograde track a
     // player clicks), so the burn only raises the orbit and never turns into a descent.
-    public static void HoldProgradeFullThrottle(Vehicle vehicle)
+    //
+    // The throttle is a parameter because the g-load throttle cap the flight computer applies to
+    // an auto burn does not exist on a manual one: a long manual full-throttle burn keeps shedding
+    // mass until PeakGLoad passes VehicleStructuralLimits.EffectiveMaxGLoad and the game destroys
+    // the vehicle. Tests that fly for several stagings have to throttle back.
+    public static void HoldPrograde(Vehicle vehicle, float throttle = 1f)
     {
         vehicle.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
         vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Prograde);
-        TestSupport.SetManualControlInputs(vehicle, 1f, engineOn: true);
+        TestSupport.SetManualControlInputs(vehicle, throttle, engineOn: true);
     }
 
     // AutoStage is edge-triggered on propellant depletion, so the first stage is lit the way a
@@ -74,8 +79,9 @@ internal static class AutoStageHost
     {
         Program.ControlledVehicle = null;
         Mod.AutoStageEnabled = false;
-        StagingDetectionPatch.Reset();
-        VehicleUpdateTask._forceOffRails = false;
+        StagingDetector.Reset();
+        StagingHelpers.Reset();
+        PhysicsBubble._forceOffRails = false;
         Config.LoadGlobalConfig();
         TestSupport.DespawnNewVehicles(system, preexisting);
     }

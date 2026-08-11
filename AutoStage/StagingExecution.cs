@@ -28,6 +28,10 @@ static class StagingExecution
         // Up front so every return path invalidates.
         StagingHelpers.InvalidateSequenceCache();
 
+        // Stock opens ActivateNextSequence with this, so the staging window
+        // follows an auto-stage the same way it follows a manual one.
+        SequenceList.RequestScrollToBottom();
+
         SequenceList seqList = vehicle.Parts.SequenceList;
         ReadOnlySpan<Sequence> sequences = seqList.Sequences;
 
@@ -55,15 +59,9 @@ static class StagingExecution
         double engineDelay = Config.GetSequenceEngineDelay(vehicle, seqNumber);
         double decouplerDelay = Config.GetSequenceDecouplerDelay(vehicle, seqNumber);
 
-        // Update ActiveSequence via reflection (private setter)
-        if (GameReflection.SequenceList_ActiveSequence == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AutoStage] SequenceList.ActiveSequence reflection target lost, falling back to stock activation.");
-            vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
-            return null;
-        }
-        GameReflection.SequenceList_ActiveSequence.SetValue(seqList, seqNumber);
+        // Private setter, so reflection. Non-null because ValidateAll gates the
+        // only patch that can reach this method.
+        GameReflection.SequenceList_ActiveSequence!.SetValue(seqList, seqNumber);
         TimedAlert.Create($"Sequence {seqNumber} activated", Color.Yellow, 3.0);
 
         if (DebugConfig.AutoStage)
@@ -82,7 +80,11 @@ static class StagingExecution
         }
 
         // Guard against re-entrant ResetCaches during part activation (same as stock)
-        GameReflection.SequenceList_updatingSequence?.SetValue(seqList, true);
+        // Same guard stock ActivateNextSequence uses around its own activation
+        // loop: SequenceList.ResetCaches early-returns while this is set, so a
+        // re-entrant reset cannot rebuild Sequence._partsCache under the span
+        // the loop below is iterating. Non-null because ValidateAll covers it.
+        GameReflection.SequenceList_updatingSequence!.SetValue(seqList, true);
         target.Activated = true;
 
         ReadOnlySpan<Part> parts = target.Parts;
@@ -112,25 +114,28 @@ static class StagingExecution
             }
         }
 
-        GameReflection.SequenceList_updatingSequence?.SetValue(seqList, false);
+        GameReflection.SequenceList_updatingSequence!.SetValue(seqList, false);
         seqList.ResetCaches();
+        // The scan above marks empty sequences activated on its way past them,
+        // exactly the rows this prunes. Stock ends ActivateNextSequence with it
+        // for the same reason.
+        seqList.RemoveSpentSequences();
         StagingHelpers.InvalidateSequenceCache();
 
-        // Must not drain IActivateInputBuffer from inside UpdateFromTaskResults:
-        // Decoupler.Decouple -> Vehicle.Split -> Vehicle.AddToTask mutates the
-        // VehicleUpdateTask list that ApplyResultsToVehicles is iterating. The
-        // stock drain in Program.PrepareFrame runs a few ms later in the same
-        // frame, after the foreach completes.
+        // Must not drain IActivateInputBuffer from here: Decoupler.Decouple ->
+        // Vehicle.Split -> Vehicle.AddToBubble mutates the vehicle list that
+        // PhysicsBubble is iterating in the apply this runs inside. The stock
+        // drain in Program.PrepareFrame runs a few ms later in the same frame,
+        // once every bubble has been applied.
 
         // Kept defensively, not because the activation needs it: every IActivate
         // here only appends to InputEvents.IActivateInputBuffer, so the tree is
-        // unchanged at this point and this recomputes the same values it already
-        // holds. It is not free either, since RecomputeSolidMotorStacks resizes
-        // every solid motor's nozzles. Removing it is the obvious cleanup, but
-        // nothing here covers the Auto-burn-through-staging path it was
-        // originally credited with, so that wants a deliberate test first.
-        // Safe to call from the Postfix because UpdateAfterPartTreeModification
-        // does not touch Vehicle.UpdateTask.
+        // unchanged at this point and this recomputes the same mass, collision
+        // and flight-computer config it already holds. Nothing here covers the
+        // Auto-burn-through-staging path it was credited with, so dropping it
+        // wants a deliberate test first.
+        // Safe to call here because UpdateAfterPartTreeModification touches only
+        // this vehicle's own derived state, never its PhysicsBubble.
         vehicle.UpdateAfterPartTreeModification();
 
         bool anyPending = (pendingEngines != null && pendingEngines.Count > 0)
@@ -209,10 +214,9 @@ static class StagingExecution
 /// have independent deadlines, both measured from the staging trigger.
 ///
 /// Deadlines in sim time rather than a countdown fed by
-/// Vehicle.KinematicMeasurements.DeltaTime: VehicleUpdateTask only skips the
-/// motion and physics passes at DeltaTime <= 0, so the detector's postfix keeps
-/// running over frozen state while the game is paused, and the last non-zero
-/// DeltaTime would keep draining the countdown there.
+/// Vehicle.KinematicMeasurements.DeltaTime: the detector runs on every frame,
+/// including the ones the game spends paused over frozen state, and the last
+/// non-zero DeltaTime would keep draining the countdown there.
 /// </summary>
 class PendingStaging
 {

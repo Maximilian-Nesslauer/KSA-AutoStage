@@ -12,7 +12,7 @@ public sealed class Mod
     private static Harmony? _harmony;
 
     // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.8.5.5168";
+    private const string TestedGameVersion = "v2026.8.19.5261";
 
     internal static bool AutoStageEnabled;
     internal static bool IgnitionDelayAvailable;
@@ -21,7 +21,7 @@ public sealed class Mod
 
     /// <summary>
     /// Injects our enum into GaugeButtonFlightComputer.EnumTypes before the
-    /// game processes Gauges.xml, so BurnControlPatch.xml can resolve
+    /// game processes Gauges.xml, so EngineControlPatch.xml can resolve
     /// Action="AutoStageToggle". The game looks up the entry by Type.Name,
     /// which matches "AutoStageToggle".
     /// </summary>
@@ -60,9 +60,8 @@ public sealed class Mod
             _harmony.CreateClassProcessor(typeof(Patch_IsFlightComputerDisabled)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ActivateNextSequence)).Patch();
             _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ResetCaches)).Patch();
-            _harmony.Patch(GameReflection.Vehicle_UpdateFromTaskResults,
-                prefix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Prefix)),
-                postfix: new HarmonyMethod(typeof(StagingDetectionPatch), nameof(StagingDetectionPatch.Postfix)));
+            _harmony.CreateClassProcessor(typeof(Patch_Universe_ApplyVehicleSolvers)).Patch();
+            _harmony.CreateClassProcessor(typeof(Patch_Vehicle_Dispose)).Patch();
 
             // The settings window carries the only in-game switch for the
             // spent-stage drop, which uses none of the ignition-delay reflection
@@ -82,7 +81,6 @@ public sealed class Mod
         {
             IgnitionDelayAvailable = true;
             _harmony.CreateClassProcessor(typeof(PartWindowPatch)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_Vehicle_Dispose)).Patch();
 
             if (DebugConfig.IgnitionDelay)
                 DefaultCategory.Log.Debug("[AutoStage] IgnitionDelay patches applied.");
@@ -104,7 +102,7 @@ public sealed class Mod
         _harmony = null;
         AutoStageEnabled = false;
         IgnitionDelayAvailable = false;
-        StagingDetectionPatch.Reset();
+        StagingDetector.Reset();
         StagingHelpers.Reset();
         SettingsTabPatch.Reset();
         Config.Reset();

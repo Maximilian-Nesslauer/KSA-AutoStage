@@ -12,5 +12,14 @@ namespace AutoStage;
 static class Patch_Vehicle_Dispose
 {
     // Prefix so Vehicle.Id is still valid.
-    static void Prefix(Vehicle __instance) => Config.RemoveVehicle(__instance.Id);
+    static void Prefix(Vehicle __instance)
+    {
+        Config.RemoveVehicle(__instance.Id);
+        // Every per-vehicle cache keys on the Vehicle reference and would
+        // otherwise pin the disposed vehicle and its whole part graph until
+        // some other vehicle happens to displace it.
+        StagingHelpers.ForgetVehicle(__instance);
+        JettisonAnalysis.ForgetVehicle(__instance);
+        StagingDetector.ForgetVehicle(__instance);
+    }
 }

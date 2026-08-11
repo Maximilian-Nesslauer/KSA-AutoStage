@@ -3,13 +3,14 @@ using System.Diagnostics;
 using AutoStage.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
+using HarmonyLib;
 using KSA;
 
 namespace AutoStage;
 
 /// <summary>
-/// Hooks Vehicle.UpdateFromTaskResults (main thread, after worker results are applied)
-/// to detect propellant depletion and trigger staging.
+/// Detects propellant depletion and triggers staging, once per frame around the
+/// point where the vehicle solvers are applied to the universe.
 ///
 /// State machine. Two triggers leave Monitoring, both into the same path:
 ///   Monitoring -> active engines lose propellant -> stage
@@ -32,8 +33,14 @@ namespace AutoStage;
 /// engines is computed by the worker thread and only flips one tick after
 /// activation. During that window we force BurnMode=Auto to stop the worker
 /// from aborting the burn.
+///
+/// The state belongs to the controlled vehicle, but a pending staging does not:
+/// it is ticked every frame against the vehicle it was committed on, whatever
+/// is controlled at the time. Its sequence counts as activated the moment the
+/// staging is decided, and stock skips activated sequences forever, so parts
+/// left unfired would be dead weight for the rest of the flight.
 /// </summary>
-static class StagingDetectionPatch
+static class StagingDetector
 {
     enum State { Monitoring, AwaitingIgnition, AwaitingPropagation }
 
@@ -48,6 +55,13 @@ static class StagingDetectionPatch
     private static PendingStaging? _pendingStaging;
     private static Vehicle? _currentVehicle;
 
+    // Taken by Sample before the solver results reach the universe and consumed
+    // by Evaluate afterwards. The vehicle doubles as the validity flag, so one
+    // sample can never be evaluated twice.
+    private static Vehicle? _sampledVehicle;
+    private static FlightComputerBurnMode _sampledBurnMode;
+    private static bool _sampledHadPropellant;
+
     // 1 frame for worker thread to process new engines, +1 margin.
     private const int PropagationFrames = 2;
 
@@ -55,74 +69,88 @@ static class StagingDetectionPatch
     // Unlike the all-dry trigger, which fires on a falling edge, this one is
     // level-triggered and would otherwise act on the first frame it reads true.
     //
-    // Sim time rather than a frame count because VehicleUpdateTask only skips
-    // the motion and physics passes at DeltaTime <= 0, not ApplyResultsToVehicles,
-    // so this postfix keeps running over frozen state while the game is paused.
-    // A frame counter would arm and fire there; Universe.GetElapsedSeconds does not move.
+    // Sim time rather than a frame count because Universe.ApplyVehicleSolvers
+    // runs every frame regardless of the simulation speed, so Evaluate keeps
+    // running over frozen state while the game is paused. A frame counter would
+    // arm and fire there; Universe.GetElapsedSeconds does not move.
     private const double SpentJettisonDwellSeconds = 0.25;
 
-    internal static void Prefix(Vehicle __instance,
-        out (FlightComputerBurnMode mode, bool hadPropellant) __state)
+    /// <summary>
+    /// Snapshot of the controlled vehicle taken before the worker results are
+    /// installed. Both values are edges the applied results destroy: the worker
+    /// forces BurnMode=Manual when it finds no propellant, and the propellant
+    /// state itself is what the all-dry trigger compares against.
+    ///
+    /// Reading it here rather than carrying the previous frame's value forward
+    /// is load-bearing: InputEvents.ApplyInputEvents drains between two applies,
+    /// so an engine the player shut down in the meantime already reads inactive
+    /// by now. Carried forward it would look like a burnout and stage.
+    /// </summary>
+    internal static void Sample()
     {
-        if (__instance != Program.ControlledVehicle || !Mod.AutoStageEnabled)
+        Vehicle? vehicle = Program.ControlledVehicle;
+        _sampledVehicle = vehicle;
+
+        if (vehicle == null || !Mod.AutoStageEnabled)
         {
-            __state = default;
+            _sampledBurnMode = FlightComputerBurnMode.Manual;
+            _sampledHadPropellant = false;
             return;
         }
-        __state = (
-            __instance.FlightComputer.BurnMode,
-            StagingHelpers.HasActiveEngineWithPropellant(__instance)
-        );
+
+        _sampledBurnMode = vehicle.FlightComputer.BurnMode;
+        _sampledHadPropellant = StagingHelpers.HasActiveEngineWithPropellant(vehicle);
     }
 
-    internal static void Postfix(Vehicle __instance,
-        (FlightComputerBurnMode mode, bool hadPropellant) __state)
+    internal static void Evaluate()
     {
 #if DEBUG
         long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
 #endif
-        // Bare return for the other vehicles: this postfix runs once per vehicle
-        // per frame, so touching the detector's state here would reset it before
-        // the controlled vehicle's own timers could ever elapse.
-        if (__instance != Program.ControlledVehicle)
+        // Ahead of every other decision and regardless of which vehicle is
+        // controlled or whether the mod is still armed. ActivateNextSequenceSplit
+        // has already marked the sequence activated, and both
+        // SequenceList.ActivateNextSequence and GetNextSequenceNumber skip an
+        // activated sequence, so parts dropped here can never be fired by
+        // anything again. Switching the mod off means "stop deciding to stage",
+        // not "stop mid-separation", and the same holds for looking away.
+        TickPendingStaging(Universe.GetElapsedSeconds());
+
+        Vehicle? vehicle = _sampledVehicle;
+        _sampledVehicle = null;
+        if (vehicle == null)
             return;
 
         if (!Mod.AutoStageEnabled)
         {
-            // A staging already committed keeps running to completion. Its
-            // sequence is marked activated and its parts are only waiting on a
-            // delay, so abandoning it here would leave them unfired for good,
-            // and switching the mod off means "stop deciding to stage", not
-            // "stop mid-separation".
-            if (_state == State.AwaitingIgnition)
-            {
-                TickPendingStaging(__instance, Universe.GetElapsedSeconds());
-                return;
-            }
-
-            // Everything else is dropped rather than frozen: sim time keeps
-            // running while the mod is off, so a dwell left armed here would
-            // already be expired on the frame it is switched back on.
-            _state = State.Monitoring;
+            // Dropped rather than frozen: sim time keeps running while the mod
+            // is off, so a dwell left armed here would already be expired on
+            // the frame it is switched back on.
             _propagationFrames = 0;
             _spentJettisonSince = double.NaN;
             _spentJettisonBlocker = "";
+            if (_state != State.AwaitingIgnition)
+                _state = State.Monitoring;
             return;
         }
 
-        if (_currentVehicle != __instance)
+        if (_currentVehicle != vehicle)
         {
-            _state = State.Monitoring;
             _propagationFrames = 0;
             _spentJettisonSince = double.NaN;
             _spentJettisonBlocker = "";
-            _pendingStaging = null;
-            _currentVehicle = __instance;
+            _currentVehicle = vehicle;
+            // Pick the state back up from the pending set rather than resetting
+            // to Monitoring, so returning to a vehicle mid-delay does not start
+            // a second staging on top of the one still executing.
+            _state = _pendingStaging != null && _pendingStaging.Vehicle == vehicle
+                ? State.AwaitingIgnition
+                : State.Monitoring;
         }
 
-        FlightComputer fc = __instance.FlightComputer;
+        FlightComputer fc = vehicle.FlightComputer;
         IReadOnlySet<Part>? jettison = _state == State.Monitoring && Config.DropSpentStages
-            ? JettisonAnalysis.GetPendingJettison(__instance)
+            ? JettisonAnalysis.GetPendingJettison(vehicle)
             : null;
 
         // Only the spent-jettison trigger needs the full tally. Without a
@@ -132,27 +160,27 @@ static class StagingDetectionPatch
         bool hasPropellant;
         if (jettison != null)
         {
-            survey = StagingHelpers.SurveyActiveEngines(__instance, jettison);
+            survey = StagingHelpers.SurveyActiveEngines(vehicle, jettison);
             hasPropellant = survey.AnyFueled;
         }
         else
         {
-            hasPropellant = StagingHelpers.HasActiveEngineWithPropellant(__instance);
+            hasPropellant = StagingHelpers.HasActiveEngineWithPropellant(vehicle);
         }
 
         switch (_state)
         {
             case State.Monitoring:
-                if (__state.hadPropellant && !hasPropellant
+                if (_sampledHadPropellant && !hasPropellant
                     && !IsBurnComplete(fc)
-                    && StagingHelpers.HasNextEngineSequence(__instance))
+                    && StagingHelpers.HasNextEngineSequence(vehicle))
                 {
                     _spentJettisonSince = double.NaN;
-                    ExecuteStaging(__instance, fc, __state.mode);
+                    ExecuteStaging(vehicle, fc, _sampledBurnMode);
                 }
                 else if (Config.DropSpentStages)
                 {
-                    TickSpentJettison(__instance, fc, __state.mode, in survey, jettison);
+                    TickSpentJettison(vehicle, fc, _sampledBurnMode, in survey, jettison);
                 }
                 else
                 {
@@ -164,7 +192,6 @@ static class StagingDetectionPatch
 
             case State.AwaitingIgnition:
                 MaintainBurnMode(fc);
-                TickPendingStaging(__instance, Universe.GetElapsedSeconds());
                 break;
 
             case State.AwaitingPropagation:
@@ -178,8 +205,8 @@ static class StagingDetectionPatch
                 else if (_propagationFrames >= PropagationFrames)
                 {
                     if (!IsBurnComplete(fc)
-                        && StagingHelpers.HasNextEngineSequence(__instance))
-                        ExecuteStaging(__instance, fc, _triggeredMode);
+                        && StagingHelpers.HasNextEngineSequence(vehicle))
+                        ExecuteStaging(vehicle, fc, _triggeredMode);
                     else
                         _state = State.Monitoring;
                 }
@@ -188,7 +215,7 @@ static class StagingDetectionPatch
 
 #if DEBUG
         if (DebugConfig.Performance)
-            PerfTracker.Record("StagingDetection.Postfix",
+            PerfTracker.Record("StagingDetector.Evaluate",
                 Stopwatch.GetTimestamp() - perfStart);
 #endif
     }
@@ -295,36 +322,66 @@ static class StagingDetectionPatch
             : $"[AutoStage] Spent-stage drop held on '{vehicle.Id}': {blocker} ({detail}).");
     }
 
-    private static void TickPendingStaging(Vehicle vehicle, double now)
+    /// <summary>
+    /// Fires whichever pending parts have reached their deadline, on the
+    /// vehicle the staging was committed against rather than on whatever is
+    /// controlled now.
+    /// </summary>
+    private static void TickPendingStaging(double now)
     {
         PendingStaging? p = _pendingStaging;
         if (p == null)
+            return;
+
+        if (p.Vehicle.IsDisposed)
         {
-            LogHelper.ErrorOnce("StagingDetection.AwaitingIgnition.NoPending",
-                "[AutoStage] AwaitingIgnition with no pending staging, "
-                + "recovering to Monitoring. Please report.");
-            _state = State.Monitoring;
+            _pendingStaging = null;
             return;
         }
 
         if (p.DecouplersPending && now >= p.DecouplerDeadline)
         {
-            StagingExecution.ActivatePendingParts(vehicle, p.DecouplerParts!, "decoupler");
+            StagingExecution.ActivatePendingParts(p.Vehicle, p.DecouplerParts!, "decoupler");
             p.ClearDecouplers();
         }
 
         if (p.EnginesPending && now >= p.EngineDeadline)
         {
-            StagingExecution.ActivatePendingParts(vehicle, p.EngineParts!, "engine");
+            StagingExecution.ActivatePendingParts(p.Vehicle, p.EngineParts!, "engine");
             p.ClearEngines();
         }
 
-        if (!p.AnyPending)
+        if (p.AnyPending)
+            return;
+
+        _pendingStaging = null;
+        // Only the vehicle being monitored advances the state machine. For any
+        // other one the parts have fired and there is nothing left to wait for.
+        if (_state == State.AwaitingIgnition && _currentVehicle == p.Vehicle)
         {
-            _pendingStaging = null;
             _state = State.AwaitingPropagation;
             _propagationFrames = 0;
         }
+    }
+
+    /// <summary>
+    /// Fires every part still pending, ignoring its deadline. Used when a
+    /// second staging is about to take the single pending slot: dropping the
+    /// first would leave its already-activated sequence unfired for good, and
+    /// firing it early only shortens a delay that exists for looks.
+    /// </summary>
+    private static void FlushPendingStaging()
+    {
+        PendingStaging? p = _pendingStaging;
+        if (p == null)
+            return;
+
+        if (DebugConfig.IgnitionDelay)
+            DefaultCategory.Log.Debug(
+                $"[AutoStage] Firing the pending staging on '{p.Vehicle.Id}' early, "
+                + "a second staging needs the slot.");
+
+        TickPendingStaging(double.PositiveInfinity);
     }
 
     private static void ExecuteStaging(Vehicle vehicle, FlightComputer fc,
@@ -340,6 +397,10 @@ static class StagingDetectionPatch
         }
 
         _triggeredMode = originalBurnMode;
+
+        // There is one pending slot. A staging on another vehicle can still own
+        // it after a focus change, so empty it before it is overwritten.
+        FlushPendingStaging();
 
         PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
 
@@ -379,11 +440,11 @@ static class StagingDetectionPatch
     /// propellant. FlightComputer.UpdateBurnTarget forces BurnMode=Manual
     /// whenever HasAnyPropellant is false on the new engines.
     ///
-    /// The override runs in the main-thread postfix, right after
-    /// UpdateFromTaskResults installed the worker's new FlightComputer.
-    /// The next worker task copies this FC, so its next ComputeControl
-    /// starts from Auto again. Manual wins within a single worker pass
-    /// (where HasAnyPropellant is false), Auto wins at the transition.
+    /// The override runs after the solver results installed the worker's new
+    /// FlightComputer. The next worker task copies this FC, so its next
+    /// ComputeControl starts from Auto again. Manual wins within a single
+    /// worker pass (where HasAnyPropellant is false), Auto wins at the
+    /// transition.
     /// </summary>
     private static void MaintainBurnMode(FlightComputer fc)
     {
@@ -404,7 +465,7 @@ static class StagingDetectionPatch
     /// the BurnPlan entry it came from and is serialized into the save, so a
     /// vehicle can load with a BurnTarget whose DeltaVTargetCci is the zero
     /// vector (the stock burn indicator shows for it too). Dot(anything, zero)
-    /// is zero, and zero passes a "<= 0" overshoot test, so without this check
+    /// is zero, and zero passes a "&lt;= 0" overshoot test, so without this check
     /// a stale target reads as a finished burn forever and both staging
     /// triggers stay disabled for the rest of the flight.
     /// </summary>
@@ -416,6 +477,27 @@ static class StagingDetectionPatch
         return float3.Dot(burn.DeltaVToGoCci, burn.DeltaVTargetCci) <= 0f;
     }
 
+    /// <summary>
+    /// Drops the references a disposed vehicle would otherwise keep alive. A
+    /// pending staging on it is abandoned rather than fired: its parts are
+    /// going away with it.
+    /// </summary>
+    internal static void ForgetVehicle(Vehicle vehicle)
+    {
+        if (_currentVehicle == vehicle)
+        {
+            _currentVehicle = null;
+            _state = State.Monitoring;
+            _propagationFrames = 0;
+            _spentJettisonSince = double.NaN;
+            _spentJettisonBlocker = "";
+        }
+        if (_sampledVehicle == vehicle)
+            _sampledVehicle = null;
+        if (_pendingStaging?.Vehicle == vehicle)
+            _pendingStaging = null;
+    }
+
     internal static void Reset()
     {
         _state = State.Monitoring;
@@ -425,6 +507,31 @@ static class StagingDetectionPatch
         _triggeredMode = FlightComputerBurnMode.Manual;
         _pendingStaging = null;
         _currentVehicle = null;
+        _sampledVehicle = null;
+        _sampledBurnMode = FlightComputerBurnMode.Manual;
+        _sampledHadPropellant = false;
         JettisonAnalysis.Reset();
     }
+}
+
+/// <summary>
+/// Drives the detector around the whole vehicle-solver apply.
+///
+/// This is the only point in the apply that is still guaranteed to be on the
+/// main thread and to run exactly once per frame: the per-vehicle half of the
+/// apply, Vehicle.UpdateFromTaskResultsUnsynchronized, is parcelled out to the
+/// vehicle worker pool one job per physics bubble. Its main-thread counterpart,
+/// Vehicle.UpdateFromTaskResultsSynchronized, is marked AggressiveInlining and
+/// so is not a dependable patch target either.
+///
+/// The prefix therefore samples ahead of every bubble's results and the postfix
+/// decides once they are all installed, which is also where staging may mutate
+/// the vehicle without racing a worker.
+/// </summary>
+[HarmonyPatch(typeof(Universe), nameof(Universe.ApplyVehicleSolvers))]
+static class Patch_Universe_ApplyVehicleSolvers
+{
+    static void Prefix() => StagingDetector.Sample();
+
+    static void Postfix() => StagingDetector.Evaluate();
 }

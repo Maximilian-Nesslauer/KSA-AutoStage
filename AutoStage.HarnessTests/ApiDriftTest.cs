@@ -37,12 +37,48 @@ public sealed class ApiDriftTest : IHarnessTest
                 "SequenceList.ActivateNextSequence")
             & CheckPatched(AccessTools.Method(typeof(SequenceList), nameof(SequenceList.ResetCaches)),
                 "SequenceList.ResetCaches")
-            & CheckPatched(GameReflection.Vehicle_UpdateFromTaskResults, "Vehicle.UpdateFromTaskResults")
-            & CheckPatched(GameReflection.Vehicle_Dispose, "Vehicle.Dispose(bool)");
+            & CheckPatched(AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers)),
+                "Universe.ApplyVehicleSolvers")
+            & CheckPatched(GameReflection.Vehicle_Dispose, "Vehicle.Dispose(bool)")
+            & CheckPatched(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.ToggleEnum)),
+                "Vehicle.ToggleEnum")
+            & CheckPatched(GameReflection.Vehicle_IsSet_Enum, "Vehicle.IsSet<Enum>")
+            & CheckPatched(GameReflection.Vehicle_IsFlightComputerDisabled_Enum,
+                "Vehicle.IsFlightComputerDisabled<Enum>")
+            & CheckPatched(AccessTools.Method(typeof(Part), nameof(Part.DrawPartInfo)),
+                "Part.DrawPartInfo")
+            & CheckPatched(AccessTools.Method(typeof(GameSettings), nameof(GameSettings.OnDrawUi)),
+                "GameSettings.OnDrawUi");
 
-        bool ok = coreOk && delayOk && enumOk && patchesOk;
+        // Harmony.GetPatchInfo cannot see this one. SettingsTabPatch is a transpiler that
+        // searches OnDrawUi's IL for a call to ConsoleStyle.PopWidgetStyle(); if the anchor
+        // moves it logs a warning, returns the instructions untouched, and still counts as
+        // applied, so the settings page disappears while every check above stays green.
+        bool anchorOk = SettingsAnchorPresent();
+        HarnessLog.Line($"[autostage-api-drift] settings transpiler anchor " +
+                        $"(ConsoleStyle.PopWidgetStyle in GameSettings.OnDrawUi) => {(anchorOk ? "ok" : "MISSING")}");
+
+        bool ok = coreOk && delayOk && enumOk && patchesOk && anchorOk;
         HarnessLog.Line($"[autostage-api-drift] {TestSupport.Verdict(ok)}");
         return ok ? 0 : 1;
+    }
+
+    // Reads the patched method's IL the same way the transpiler does, so this fails for the
+    // same reason the transpiler would give up.
+    private static bool SettingsAnchorPresent()
+    {
+        MethodInfo? anchor = AccessTools.Method(typeof(ConsoleStyle),
+            nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
+        MethodBase? target = AccessTools.Method(typeof(GameSettings), nameof(GameSettings.OnDrawUi));
+        if (anchor == null || target == null)
+            return false;
+
+        foreach (CodeInstruction instruction in PatchProcessor.GetOriginalInstructions(target))
+        {
+            if (instruction.Calls(anchor))
+                return true;
+        }
+        return false;
     }
 
     private static bool CheckPatched(MethodBase? target, string name)

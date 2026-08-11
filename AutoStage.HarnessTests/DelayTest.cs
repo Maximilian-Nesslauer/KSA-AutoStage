@@ -28,6 +28,11 @@ public sealed class DelayTest : IHarnessTest
     private const double MeasureDt = 0.5;
     private const double MaxStagingSeconds = 900.0;
     private const double MaxPhaseSeconds = 30.0;
+    // Part throttle, unlike the other flying tests. Those burn a stage and end; this one has to
+    // survive several stagings to reach the sequence pair it measures, and a full-throttle stack
+    // that keeps shedding mass runs itself past VehicleStructuralLimits.EffectiveMaxGLoad and is
+    // destroyed mid-test. The delays being measured do not depend on the throttle.
+    private const float Throttle = 0.4f;
 
     public string Name => "autostage-delays";
 
@@ -49,23 +54,25 @@ public sealed class DelayTest : IHarnessTest
 
         CelestialSystem system = session.System;
         HashSet<string> preexisting = TestSupport.CollectVehicleIds(system);
-        Vehicle vehicle;
-        try
-        {
-            vehicle = AutoStageHost.SpawnFromSave(session, saveId, "AutoStageDelayTest", out _);
-        }
-        catch (InvalidOperationException e)
-        {
-            HarnessLog.Line($"[autostage-delays] FAIL: {e.Message}");
-            return 1;
-        }
-
         SimDriver driver = session.CreateDriver();
         double t = 0.0;
         bool ok = true;
         try
         {
-            VehicleUpdateTask._forceOffRails = true;
+            // Inside the try: Astronomical's constructor registers with the system before the
+            // spawner finishes, so a throw part-way still leaves a vehicle for cleanup to remove.
+            Vehicle vehicle;
+            try
+            {
+                vehicle = AutoStageHost.SpawnFromSave(session, saveId, "AutoStageDelayTest", out _);
+            }
+            catch (InvalidOperationException e)
+            {
+                HarnessLog.Line($"[autostage-delays] FAIL: {e.Message}");
+                return 1;
+            }
+
+            PhysicsBubble._forceOffRails = true;
             Program.ControlledVehicle = vehicle;
 
             // Pinned to the shipped default rather than the local file, so the run covers the same
@@ -88,7 +95,7 @@ public sealed class DelayTest : IHarnessTest
                 HarnessLog.Line("[autostage-delays] FAIL: ToggleEnum(AutoStageToggle) did not enable the mod.");
                 return 1;
             }
-            AutoStageHost.HoldProgradeFullThrottle(vehicle);
+            AutoStageHost.HoldPrograde(vehicle, Throttle);
             AutoStageHost.IgniteFirstStage(vehicle, driver);
 
             bool StepUntil(Func<bool> condition, double capSeconds, string what)
@@ -115,14 +122,26 @@ public sealed class DelayTest : IHarnessTest
                     MaxStagingSeconds, "the decoupler sequence to activate"))
                 return 1;
             double tDecouplerSeq = t;
+            StructuralLoad loadBeforeSplit = vehicle.StructuralLoad;
 
-            // Sampled here rather than before the wait above: an earlier sequence may shed a vehicle
-            // of its own on the way, which would leave the split condition already true and report a
-            // zero delay for a decoupler that fired exactly on time.
-            int vehiclesBefore = TestSupport.CountVehicles(system);
-            if (!StepUntil(() => TestSupport.CountVehicles(system) > vehiclesBefore,
+            // The part count on the vehicle itself, not the system-wide vehicle count: shed
+            // boosters can be destroyed on the same frame they separate (a radial stack drops
+            // four of them into each other), which leaves the net count flat or falling while
+            // the decouplers did fire exactly on time.
+            int partsBefore = vehicle.Parts.Count;
+            if (!StepUntil(() => vehicle.IsDisposed || vehicle.Parts.Count < partsBefore,
                     MaxPhaseSeconds, "the decoupler split"))
+            {
+                LogSequenceState(vehicle, decouplerSeq!, "decoupler sequence at timeout");
                 return 1;
+            }
+            if (vehicle.IsDisposed)
+            {
+                HarnessLog.Line("[autostage-delays] FAIL: the vehicle was destroyed during the " +
+                                $"decoupler split ({DescribeLoad(loadBeforeSplit)} before it). " +
+                                "The scenario, not the delay, is at fault: lower the throttle.");
+                return 1;
+            }
             double splitDelay = t - tDecouplerSeq;
 
             if (!StepUntil(() => engineSeq!.Activated,
@@ -158,6 +177,31 @@ public sealed class DelayTest : IHarnessTest
 
         HarnessLog.Line($"[autostage-delays] {TestSupport.Verdict(ok)}");
         return ok ? 0 : 1;
+    }
+
+    private static string DescribeLoad(in StructuralLoad load) =>
+        $"g-load {load.PeakGLoad:F1}/{load.MaxGLoad:F1} ({load.GLoadFraction:P0} of the limit), " +
+        $"dynamic pressure {load.DynamicPressureFraction:P0} of the limit";
+
+    // A timeout here means either the sequence never carried the decouplers the search picked it
+    // for, or the configured delay was not found for it. Both are indistinguishable from the
+    // outside, so name them.
+    private static void LogSequenceState(Vehicle vehicle, Sequence seq, string label)
+    {
+        HarnessLog.Line($"[autostage-delays] {label}: number={seq.Number}, activated={seq.Activated}, " +
+                        $"parts={seq.Parts.Length}, " +
+                        $"configuredDelay={Config.GetSequenceDecouplerDelay(vehicle, seq.Number):F1}s, " +
+                        $"nextSequence={vehicle.Parts.SequenceList.GetNextSequenceNumber()}");
+        ReadOnlySpan<Part> parts = seq.Parts;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            Span<Decoupler> decouplers = parts[i].Modules.Get<Decoupler>();
+            for (int d = 0; d < decouplers.Length; d++)
+                HarnessLog.Line($"[autostage-delays]   '{parts[i].Id}' decoupler active={decouplers[d].IsActive} " +
+                                $"enabled={decouplers[d].IsEnabled} " +
+                                $"connected={decouplers[d].Connector.Connection != null} " +
+                                $"template={parts[i].Template.Id}");
+        }
     }
 
     // The measurement needs a stage layout of: engines (the launch stage), a decoupler-only

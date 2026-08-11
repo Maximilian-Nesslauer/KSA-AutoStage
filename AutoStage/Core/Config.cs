@@ -58,6 +58,10 @@ static class Config
 
     public static void Reset()
     {
+        // Before the dirty set is dropped: the part window only flushes on
+        // IsItemDeactivatedAfterEdit, so an override typed right before an
+        // unload would otherwise be lost without a trace.
+        FlushPendingSaves();
         EngineDelays.Clear();
         DecouplerDelays.Clear();
         DropSpentStages = DropSpentStagesDefault;
