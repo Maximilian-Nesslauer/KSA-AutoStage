@@ -297,9 +297,9 @@ public sealed class SpentStageDropTest : IHarnessTest
                 cores += $" [{core.GetType().Name} burning={burning} " +
                          $"fed={core.ComputePropellantAvailable(moleStates, burning)}]";
             }
-            Part full = engine.Parent.FullPart;
-            HarnessLog.Line($"[autostage-spent-drop]   engine '{full.Id}' seq={full.Sequence} " +
-                            $"active={engine.IsActive}{cores}");
+            // The engine's own row, not the part's.
+            HarnessLog.Line($"[autostage-spent-drop]   engine '{engine.Parent.FullPart.Id}' " +
+                            $"seq={engine.Sequence} active={engine.IsActive}{cores}");
         }
 
         int next = vehicle.Parts.SequenceList.GetNextSequenceNumber();
@@ -307,10 +307,17 @@ public sealed class SpentStageDropTest : IHarnessTest
         {
             if (sequence.Number != next) continue;
             foreach (Part part in sequence.Parts)
-                foreach (Decoupler decoupler in part.Modules.Get<Decoupler>())
+            {
+                // Only what this row fires.
+                foreach (ISequenced module in part.InSequence(next))
+                {
+                    if (module is not Decoupler decoupler) continue;
                     HarnessLog.Line($"[autostage-spent-drop]   next seq {next} decoupler on " +
-                                    $"'{part.Id}' connector='{decoupler.Connector.Id}' " +
+                                    $"'{part.Id}' {SequencedModules.Describe(module)} " +
+                                    $"connector='{decoupler.Connector.Id}' " +
                                     $"connected={decoupler.Connector.Connection != null}");
+                }
+            }
         }
     }
 

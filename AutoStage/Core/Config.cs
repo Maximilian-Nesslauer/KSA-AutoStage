@@ -8,15 +8,10 @@ using KSA;
 namespace AutoStage.Core;
 
 /// <summary>
-/// Manages staging configuration with two layers:
-/// 1. Global config (autostage.toml) with per-part-variant delays and the
-///    staging behaviour switches
-/// 2. Per-vehicle overrides (vehicles/{id}.toml) with per-sequence delays
-///
-/// Engine and decoupler delays are tracked independently. Decoupler delays
-/// default to 0 so stock staging timing is preserved unless the user sets one.
-///
-/// All files live in the mod's own directory, never touching game saves.
+/// Two layers: autostage.toml (per part variant, plus the behaviour switches)
+/// and vehicles/{id}.toml (per sequence), the latter winning. Decoupler delays
+/// default to 0, so stock timing holds until the user sets one. All files live
+/// in the mod's own directory, never in a game save.
 /// </summary>
 static class Config
 {
@@ -309,17 +304,16 @@ static class Config
     }
 
     public static double ComputeSequenceEngineDelay(Vehicle vehicle, int sequenceNumber)
-        => ComputeSequenceMaxDelay(vehicle, sequenceNumber,
-            hasTargetModule: p => p.HasAny<EngineController>(),
-            getDelay: id => GetEngineDelay(id));
+        => ComputeSequenceMaxDelay(vehicle, sequenceNumber, DelayKind.Engine);
 
     public static double ComputeSequenceDecouplerDelay(Vehicle vehicle, int sequenceNumber)
-        => ComputeSequenceMaxDelay(vehicle, sequenceNumber,
-            hasTargetModule: p => p.HasAny<Decoupler>(),
-            getDelay: id => GetDecouplerDelay(id));
+        => ComputeSequenceMaxDelay(vehicle, sequenceNumber, DelayKind.Decoupler);
 
-    private static double ComputeSequenceMaxDelay(Vehicle vehicle, int sequenceNumber,
-        Func<Part, bool> hasTargetModule, Func<string, double> getDelay)
+    /// <summary>
+    /// Longest delay among the modules of one kind this row fires. Per module,
+    /// not per part: else a decoupler-only row inherits the part's engine delay.
+    /// </summary>
+    private static double ComputeSequenceMaxDelay(Vehicle vehicle, int sequenceNumber, DelayKind kind)
     {
         double maxDelay = 0.0;
         foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
@@ -328,8 +322,15 @@ static class Config
             ReadOnlySpan<Part> parts = seq.Parts;
             for (int i = 0; i < parts.Length; i++)
             {
-                if (hasTargetModule(parts[i]))
-                    maxDelay = Math.Max(maxDelay, getDelay(parts[i].Template.Id));
+                foreach (ISequenced module in parts[i].InSequence(sequenceNumber))
+                {
+                    if (!SequencedModules.Matches(module, kind)) continue;
+                    string key = SequencedModules.DelayKey(module);
+                    double delay = kind == DelayKind.Engine
+                        ? GetEngineDelay(key)
+                        : GetDecouplerDelay(key);
+                    maxDelay = Math.Max(maxDelay, delay);
+                }
             }
             break;
         }
@@ -419,8 +420,10 @@ static class Config
         }
         catch (Exception ex)
         {
-            _vehicleEngineOverrides.Remove(vehicleId);
-            _vehicleDecouplerOverrides.Remove(vehicleId);
+            // Seeds stay: removing them clears alreadyLoaded, and the part window
+            // calls this per frame, so an unreadable file would repeat forever.
+            engine.Clear();
+            decoupler.Clear();
             DefaultCategory.Log.Error(
                 $"[AutoStage] Failed to load vehicle overrides for {vehicleId}: {ex.Message}");
         }

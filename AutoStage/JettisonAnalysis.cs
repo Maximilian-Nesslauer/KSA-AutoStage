@@ -7,19 +7,11 @@ using KSA;
 namespace AutoStage;
 
 /// <summary>
-/// Works out which parts the next sequence would throw overboard, without
-/// activating it.
-///
-/// Vehicle.Split hands the child-side subtree of a decoupled connection to the
-/// new vehicle and keeps the root side, so a decoupler sheds exactly the
-/// subtree below the child-side part of its connector's connection. Mirroring
-/// that rule lets the detector tell "this sequence only sheds burnt-out
-/// hardware" apart from "this sequence drops an engine that is still firing".
-///
-/// Only the shape of the jettison is cached, because only the shape is fixed
-/// between part-tree and sequence edits. Whether shedding it is safe depends
-/// on engine and tank state that moves every frame, so those questions are
-/// answered live by SurveyActiveEngines and CarriesOffUsablePropellant.
+/// Which parts the next row would throw overboard, without activating it.
+/// Mirrors Vehicle.Split: a decoupler sheds the subtree below the child side of
+/// its connection. Only the shape is cached, since only the shape is fixed
+/// between tree and sequence edits; whether shedding it is safe moves every
+/// frame and is answered live.
 /// </summary>
 static class JettisonAnalysis
 {
@@ -32,12 +24,8 @@ static class JettisonAnalysis
     private static bool _cachedValid;
 
     /// <summary>
-    /// The parts the next unactivated sequence would shed, or null when that
-    /// sequence is not a pure jettison: it lights an engine, or decouples
-    /// nothing this analysis can predict.
-    ///
-    /// The returned set is a buffer reused by the next rebuild, so read it
-    /// within the frame rather than holding on to it.
+    /// Null when the row is not a pure jettison: it lights an engine, or sheds
+    /// nothing predictable. The set is a buffer the next rebuild reuses.
     /// </summary>
     public static IReadOnlySet<Part>? GetPendingJettison(Vehicle vehicle)
     {
@@ -86,16 +74,19 @@ static class JettisonAnalysis
         ReadOnlySpan<Part> parts = target.Parts;
         for (int i = 0; i < parts.Length; i++)
         {
-            Part part = parts[i];
-            // An engine in the sequence means activating it lights the next
-            // stage. That is a staging decision, not shedding dead weight.
-            if (part.HasAny<EngineController>())
-                return Decline($"sequence {number} lights an engine");
-
-            Span<Decoupler> decouplers = part.Modules.Get<Decoupler>();
-            for (int d = 0; d < decouplers.Length; d++)
+            // Only what this row fires: a part is listed here for any of its
+            // modules, so judging by the part would see a later row's motor.
+            foreach (ISequenced module in parts[i].InSequence(number))
             {
-                switch (GetJettisonedRoot(decouplers[d], out Part? root))
+                // Lighting the next stage is a staging decision, not shedding
+                // dead weight.
+                if (module is EngineController)
+                    return Decline($"sequence {number} lights an engine");
+
+                if (module is not Decoupler decoupler)
+                    continue;
+
+                switch (GetJettisonedRoot(decoupler, out Part? root))
                 {
                     case Separation.Predicted:
                         anyDecoupler = true;
@@ -119,7 +110,7 @@ static class JettisonAnalysis
         {
             int engines = 0;
             foreach (Part part in _jettisonSet)
-                engines += part.Modules.Get<EngineController>().Length;
+                engines += part.SubtreeModules.Get<EngineController>().Length;
             DefaultCategory.Log.Debug(
                 $"[AutoStage] Spent-stage jettison armed: sequence {number} would shed "
                 + $"{_jettisonSet.Count} part(s) carrying {engines} engine(s).");
@@ -148,16 +139,9 @@ static class JettisonAnalysis
     }
 
     /// <summary>
-    /// True when the jettison would take propellant an engine staying with the
-    /// vehicle can still draw from, which is the crossfeed case: a booster
-    /// whose own engine is spent may still be feeding the core.
-    ///
-    /// Live, not cached: tank contents and fuel-link state move within a stage.
-    /// The caller runs it as the last gate before staging, so the scan happens
-    /// a few times per stage rather than every frame.
-    ///
-    /// Reports <paramref name="reason"/> instead of logging, so the caller can
-    /// log it once per transition rather than on every evaluation.
+    /// The crossfeed case: a booster whose own engine is spent may still feed the
+    /// core. Live, not cached, so the caller runs it as the last gate before
+    /// staging. Reports the reason so the caller can log it once per transition.
     /// </summary>
     public static bool CarriesOffUsablePropellant(Vehicle vehicle, IReadOnlySet<Part> jettison,
         out string? reason)
@@ -175,16 +159,10 @@ static class JettisonAnalysis
                 Tank tank = tanks[i];
                 if (tank.ComputeSubstanceMass(moleStates) <= 0f) continue;
 
-                // AvailableConsumers lists the consumers permitted to draw from
-                // this tank under the staging filter: ResourceManager.CreateOrders
-                // adds an engine only when PassesSameStageFilter accepts the tank.
-                // That is narrower than what an engine on a FurtherestToNearest
-                // or NearestToFurtherest flow rule actually drains, so this gate
-                // can miss a cross-stage feed. It cannot on stock parts, whose
-                // decoupler joints carry no BulkFluid capability and so cannot
-                // pass a fluid graph across a separation at all; a modded joint
-                // that does would need the retained engines' own ConsumptionOrder
-                // walked instead.
+                // AvailableConsumers is narrower than what a FurtherestToNearest
+                // flow rule actually drains, so this can miss a cross-stage feed.
+                // Not on stock parts: their decoupler joints carry no BulkFluid
+                // capability, so no fluid graph crosses a separation.
                 foreach ((ResourceManager manager, int _) in tank.AvailableConsumers)
                 {
                     if (manager.Consumer is not Combustor consumer) continue;
@@ -221,13 +199,9 @@ static class JettisonAnalysis
     {
         root = null;
 
-        // Both checks mirror the guard Decoupler.SetIsActive applies before it
-        // queues a decouple, so the predicted set matches what staging would
-        // really shed. A disabled decoupler is the player turning an adapter
-        // into a static fairing; it stays attached. Decoupler.IsActive never
-        // flips (InputEvents applies ActivateOp.Decouple straight to
-        // Decoupler.Decouple), so a spent one is recognised by its connector
-        // having lost the connection. Firing either again separates nothing.
+        // Mirrors the guard in Decoupler.SetIsActive, so the prediction matches
+        // what staging really sheds. IsActive never flips, so a spent decoupler
+        // is recognised by its connector having lost the connection.
         if (!decoupler.IsEnabled)
             return Separation.None;
 
@@ -235,6 +209,8 @@ static class JettisonAnalysis
         if (connection == null)
             return Separation.None;
 
+        // Raw, not FullPart: Vehicle.Split tests these same two, so normalizing
+        // would predict a side where stock's pick depends on connector order.
         Part near = decoupler.Connector.ConnectionPart;
         Part far = connection.OtherPart(near);
 

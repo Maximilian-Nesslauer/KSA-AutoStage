@@ -141,14 +141,14 @@ static class StagingHelpers
         return _cachedHasNextEngineSequence;
     }
 
+    // Per module: a part present only for its decoupler must not make the row
+    // count as an engine sequence.
     private static bool ComputeHasNextEngineSequence(Vehicle vehicle)
     {
         foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
         {
             if (sequence.Activated) continue;
-            ReadOnlySpan<Part> parts = sequence.Parts;
-            for (int i = 0; i < parts.Length; i++)
-                if (parts[i].HasAny<EngineController>()) return true;
+            if (SequencedModules.LightsEngine(sequence)) return true;
         }
         return false;
     }

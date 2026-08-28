@@ -228,8 +228,7 @@ public sealed class AutoStagingFlightTest : IHarnessTest
         return count;
     }
 
-    // Sequences AutoStage could still stage for: it only fires while an unactivated sequence
-    // carrying an engine is ahead of the vehicle.
+    // Rows AutoStage could still stage for. Per module, the same way the mod asks it.
     private static int RemainingEngineSequences(Vehicle vehicle)
     {
         int count = 0;
@@ -237,15 +236,8 @@ public sealed class AutoStagingFlightTest : IHarnessTest
         {
             if (seq.Activated || seq.Parts.IsEmpty)
                 continue;
-            ReadOnlySpan<Part> parts = seq.Parts;
-            for (int i = 0; i < parts.Length; i++)
-            {
-                if (parts[i].HasAny<EngineController>())
-                {
-                    count++;
-                    break;
-                }
-            }
+            if (SequencedModules.LightsEngine(seq))
+                count++;
         }
         return count;
     }

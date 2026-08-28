@@ -17,7 +17,7 @@ Activates the next sequence whenever active engines run out of propellant, and d
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.8.19.5261.
+Validated against KSA build version 2026.8.22.5348.
 
 ## Features
 
@@ -58,7 +58,7 @@ Set the decoupler delay shorter than the engine delay if you want the lower stag
 
 **Settings window (Settings > Mods > AutoStage Settings):** A "Drop spent stages early" checkbox, then two sections, "Engine Ignition Delays" and "Decoupler Delays". All known part variants are listed with an input field for the delay in seconds. Every setting takes effect immediately; click "Save" to persist it.
 
-**Part Window (right-click part > Window):** Override the delay for a specific sequence on the current vehicle. Engines show "Ignition Delay", decouplers show "Decoupler Delay". Per-vehicle overrides take priority over the global config.
+**Part Window (right-click part > Window):** Override the delay for a specific sequence on the current vehicle. Engines show "Ignition Delay", decouplers show "Decoupler Delay". A part can put each of its modules in a different sequence, so it gets one block per sequence it fires something in, each naming the module it covers: a launch escape tower with a motor and two mounts shows three. Per-vehicle overrides take priority over the global config.
 
 ### Config files
 

@@ -58,9 +58,31 @@ public sealed class ApiDriftTest : IHarnessTest
         HarnessLog.Line($"[autostage-api-drift] settings transpiler anchor " +
                         $"(ConsoleStyle.PopWidgetStyle in GameSettings.OnDrawUi) => {(anchorOk ? "ok" : "MISSING")}");
 
-        bool ok = coreOk && delayOk && enumOk && patchesOk && anchorOk;
+        bool activationOk = ActivationPathIntact();
+        HarnessLog.Line($"[autostage-api-drift] stock activation path " +
+                        $"(Part.ActivateSubtreeInStage in SequenceList.ActivateNextSequence) => " +
+                        $"{(activationOk ? "ok" : "MISSING")}");
+
+        bool ok = coreOk && delayOk && enumOk && patchesOk && anchorOk && activationOk;
         HarnessLog.Line($"[autostage-api-drift] {TestSupport.Verdict(ok)}");
         return ok ? 0 : 1;
+    }
+
+    // AutoStage reimplements ActivateNextSequence rather than patching it, and nothing the compiler
+    // checks ties the clone to the original. Canary for stock changing how a row is activated.
+    private static bool ActivationPathIntact()
+    {
+        MethodBase? target = AccessTools.Method(typeof(SequenceList), nameof(SequenceList.ActivateNextSequence));
+        MethodInfo? activate = AccessTools.Method(typeof(Part), nameof(Part.ActivateSubtreeInStage));
+        if (target == null || activate == null)
+            return false;
+
+        foreach (CodeInstruction instruction in PatchProcessor.GetOriginalInstructions(target))
+        {
+            if (instruction.Calls(activate))
+                return true;
+        }
+        return false;
     }
 
     // Reads the patched method's IL the same way the transpiler does, so this fails for the

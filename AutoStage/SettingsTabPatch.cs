@@ -12,14 +12,10 @@ using KSA;
 namespace AutoStage;
 
 /// <summary>
-/// Injects AutoStage settings into the Mods page of the game's Settings window.
-///
-/// The settings window has no tab bar any more; it is a nav rail whose pages all
-/// render into one body child, closed by a single ConsoleStyle.PopWidgetStyle.
-/// Inserting the drawer call before that is enough to land inside the body with
-/// the console widget style still pushed, and it composes with any other mod
-/// doing the same because nothing is replaced. The drawer itself checks which
-/// page is open, since the whole body is one code path now.
+/// Every settings page renders into one body child closed by a single
+/// ConsoleStyle.PopWidgetStyle, so inserting the drawer before that call lands
+/// inside the body with the widget style still pushed. Nothing is replaced, so
+/// other mods can do the same; the drawer itself checks which page is open.
 /// </summary>
 [HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi))]
 static class SettingsTabPatch
@@ -108,10 +104,8 @@ static class SettingsTabPatch
             "engine delay if you want the decoupler to fire first.");
         ImGui.Spacing();
 
-        List<PartInfo> engines = GetKnownParts(
-            ref _knownEngines, t => t.RocketEngineControllers.Count > 0);
-        List<PartInfo> decouplers = GetKnownParts(
-            ref _knownDecouplers, t => t.Decoupler != null);
+        List<PartInfo> engines = GetKnownParts(ref _knownEngines, DeclaresEngine);
+        List<PartInfo> decouplers = GetKnownParts(ref _knownDecouplers, DeclaresDecoupler);
 
         if (ImGui.CollapsingHeader("Engine Ignition Delays"u8, ImGuiTreeNodeFlags.DefaultOpen))
         {
@@ -160,6 +154,48 @@ static class SettingsTabPatch
         }
     }
 
+    /// <summary>
+    /// Same scope the game sequences: the template plus its direct sub-parts.
+    /// Anything deeper never gets a sequence, so it gets no delay row.
+    /// </summary>
+    private static bool DeclaresEngine(PartTemplate template)
+        => DeclaresModule(template, static t => t.RocketEngineControllers.Count > 0);
+
+    private static bool DeclaresDecoupler(PartTemplate template)
+        => DeclaresModule(template, HasDecouplerComponent);
+
+    private static bool DeclaresModule(PartTemplate template, Func<PartTemplate, bool> onOwnTemplate)
+    {
+        if (onOwnTemplate(template))
+            return true;
+
+        foreach (PartInstance subPart in template.SubPartInstances)
+        {
+            try
+            {
+                if (onOwnTemplate(subPart.GetTemplate()))
+                    return true;
+            }
+            catch (Exception ex)
+            {
+                // Contained, so one malformed part cannot empty the whole table.
+                DefaultCategory.Log.Warning(
+                    $"[AutoStage] Part '{template.Id}' references sub-part "
+                    + $"'{subPart.InstanceOf}', which does not resolve: {ex.Message}");
+            }
+        }
+        return false;
+    }
+
+    private static bool HasDecouplerComponent(PartTemplate template)
+    {
+        foreach (ModuleBase.TemplateDataBase component in template.Components)
+        {
+            if (component is Decoupler.TemplateData) return true;
+        }
+        return false;
+    }
+
     private struct PartInfo
     {
         public string TemplateId;
@@ -185,6 +221,8 @@ static class SettingsTabPatch
             var raw = new List<(string id, string name)>();
             foreach (PartTemplate template in collection.GetList())
             {
+                // A delay is keyed on the tree part, so a sub-part row is inert.
+                if (template.IsSubPart) continue;
                 if (filter(template))
                     raw.Add((template.Id, template.DisplayName));
             }

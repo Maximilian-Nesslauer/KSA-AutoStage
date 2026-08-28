@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using AutoStage.Core;
 using Brutal.ImGuiApi;
@@ -9,14 +10,16 @@ using KSA;
 namespace AutoStage;
 
 /// <summary>
-/// Adds "Ignition Delay" and "Decoupler Delay" settings to the pinned Part
-/// Window via DrawPartInfo postfix. Each section only shows if the part
-/// actually has the corresponding module.
+/// Delay settings in the pinned Part Window, one block per (module kind,
+/// sequence) the part fires in. A tower with a motor and two mounts on three
+/// rows gets three blocks; a part that fires nothing draws none.
 /// </summary>
 [HarmonyPatch(typeof(Part), nameof(Part.DrawPartInfo))]
 static class PartWindowPatch
 {
-    private enum DelayKind { Engine, Decoupler }
+    // Shared scratch, safe only because Part.DrawPartInfo never nests.
+    private static readonly List<int> _engineSequences = new();
+    private static readonly List<int> _decouplerSequences = new();
 
     static void Postfix(Part __instance)
     {
@@ -36,19 +39,12 @@ static class PartWindowPatch
         if (!Mod.IgnitionDelayAvailable)
             return;
 
-        // Modules (not SubtreeModules) so we only show the slider for parts
-        // ActivateInStage will actually fire.
-        bool hasEngine = part.Modules.Get<EngineController>().Length > 0;
-        bool hasDecoupler = part.Modules.Get<Decoupler>().Length > 0;
-        if (!hasEngine && !hasDecoupler)
-            return;
-
-        int seqNumber = part.Sequence;
-        if (seqNumber <= 0)
-            return;
-
         Vehicle? vehicle = Program.ControlledVehicle;
         if (vehicle == null || part.Tree != vehicle.Parts)
+            return;
+
+        CollectSequences(part);
+        if (_engineSequences.Count == 0 && _decouplerSequences.Count == 0)
             return;
 
         Config.LoadVehicleOverrides(vehicle.Id);
@@ -59,39 +55,61 @@ static class PartWindowPatch
 
         string partName = part.Template.DisplayName;
 
-        if (hasEngine)
-        {
-            DrawDelayBlock(vehicle, seqNumber, DelayKind.Engine,
-                idScope: "AutoStageIgnDelay",
-                header: string.Format(CultureInfo.InvariantCulture,
-                    "Ignition Delay - {0} (Seq {1})", partName, seqNumber));
-        }
+        foreach (int sequence in _engineSequences)
+            DrawDelayBlock(part, vehicle, sequence, DelayKind.Engine, "Ignition Delay", partName);
 
-        if (hasDecoupler)
-        {
-            DrawDelayBlock(vehicle, seqNumber, DelayKind.Decoupler,
-                idScope: "AutoStageDecDelay",
-                header: string.Format(CultureInfo.InvariantCulture,
-                    "Decoupler Delay - {0} (Seq {1})", partName, seqNumber));
-        }
+        foreach (int sequence in _decouplerSequences)
+            DrawDelayBlock(part, vehicle, sequence, DelayKind.Decoupler, "Decoupler Delay", partName);
     }
 
-    private static void DrawDelayBlock(Vehicle vehicle, int seqNumber, DelayKind kind,
-        string idScope, string header)
+    /// <summary>Ascending, deduplicated. Sequence 0 means "no row".</summary>
+    private static void CollectSequences(Part part)
+    {
+        _engineSequences.Clear();
+        _decouplerSequences.Clear();
+
+        foreach (ISequenced module in part.GetSubtreeSequencedModules())
+        {
+            int sequence = module.Sequence;
+            if (sequence <= 0) continue;
+
+            // Both named positively: an else-branch would file a future third
+            // kind as a decoupler, drawing a row staging then ignores.
+            List<int>? target =
+                module is EngineController ? _engineSequences :
+                module is Decoupler ? _decouplerSequences : null;
+            if (target != null && !target.Contains(sequence))
+                target.Add(sequence);
+        }
+
+        _engineSequences.Sort();
+        _decouplerSequences.Sort();
+    }
+
+    private static void DrawDelayBlock(Part part, Vehicle vehicle, int sequence, DelayKind kind,
+        string title, string partName)
     {
         double effectiveDelay = kind == DelayKind.Engine
-            ? Config.GetSequenceEngineDelay(vehicle, seqNumber)
-            : Config.GetSequenceDecouplerDelay(vehicle, seqNumber);
+            ? Config.GetSequenceEngineDelay(vehicle, sequence)
+            : Config.GetSequenceDecouplerDelay(vehicle, sequence);
         double partDefault = kind == DelayKind.Engine
-            ? Config.ComputeSequenceEngineDelay(vehicle, seqNumber)
-            : Config.ComputeSequenceDecouplerDelay(vehicle, seqNumber);
+            ? Config.ComputeSequenceEngineDelay(vehicle, sequence)
+            : Config.ComputeSequenceDecouplerDelay(vehicle, sequence);
         bool hasOverride = kind == DelayKind.Engine
-            ? Config.HasSequenceEngineOverride(vehicle, seqNumber)
-            : Config.HasSequenceDecouplerOverride(vehicle, seqNumber);
+            ? Config.HasSequenceEngineOverride(vehicle, sequence)
+            : Config.HasSequenceDecouplerOverride(vehicle, sequence);
 
-        ImGui.PushID(idScope);
+        // Sequence in the id, not just the label: two blocks of one kind would
+        // otherwise share it and both edit whichever drew first.
+        ImGui.PushID(string.Format(CultureInfo.InvariantCulture,
+            "AutoStageDelay_{0}_{1}", kind, sequence));
 
-        ImGui.Text(header);
+        ImGui.Text(string.Format(CultureInfo.InvariantCulture,
+            "{0} - {1} (Seq {2})", title, partName, sequence));
+
+        // Which of the part's modules this row fires.
+        DrawCoveredModules(part, sequence, kind);
+
         ImGui.Spacing();
 
         float delayValue = (float)effectiveDelay;
@@ -99,9 +117,9 @@ static class PartWindowPatch
         if (ImGui.InputFloat("###val"u8, ref delayValue, 0.1f, 1.0f, "%.1f"))
         {
             if (kind == DelayKind.Engine)
-                Config.SetSequenceEngineOverride(vehicle, seqNumber, delayValue);
+                Config.SetSequenceEngineOverride(vehicle, sequence, delayValue);
             else
-                Config.SetSequenceDecouplerOverride(vehicle, seqNumber, delayValue);
+                Config.SetSequenceDecouplerOverride(vehicle, sequence, delayValue);
         }
         if (ImGui.IsItemDeactivatedAfterEdit())
             Config.FlushPendingSaves();
@@ -117,9 +135,9 @@ static class PartWindowPatch
             if (ImGui.SmallButton("Reset to default"u8))
             {
                 if (kind == DelayKind.Engine)
-                    Config.ClearSequenceEngineOverride(vehicle, seqNumber);
+                    Config.ClearSequenceEngineOverride(vehicle, sequence);
                 else
-                    Config.ClearSequenceDecouplerOverride(vehicle, seqNumber);
+                    Config.ClearSequenceDecouplerOverride(vehicle, sequence);
                 Config.FlushPendingSaves();
             }
         }
@@ -132,5 +150,26 @@ static class PartWindowPatch
 
         ImGui.Spacing();
         ImGui.PopID();
+    }
+
+    private static void DrawCoveredModules(Part part, int sequence, DelayKind kind)
+    {
+        string? covered = null;
+        int extra = 0;
+        foreach (ISequenced module in part.InSequence(sequence))
+        {
+            if (!SequencedModules.Matches(module, kind)) continue;
+            if (covered == null)
+                covered = SequencedModules.Describe(module);
+            else
+                extra++;
+        }
+
+        if (covered == null)
+            return;
+
+        ImGui.TextDisabled(extra > 0
+            ? string.Format(CultureInfo.InvariantCulture, "fires {0} and {1} more", covered, extra)
+            : string.Format(CultureInfo.InvariantCulture, "fires {0}", covered));
     }
 }

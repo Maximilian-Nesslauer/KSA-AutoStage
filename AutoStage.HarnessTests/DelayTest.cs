@@ -195,12 +195,14 @@ public sealed class DelayTest : IHarnessTest
         ReadOnlySpan<Part> parts = seq.Parts;
         for (int i = 0; i < parts.Length; i++)
         {
-            Span<Decoupler> decouplers = parts[i].Modules.Get<Decoupler>();
-            for (int d = 0; d < decouplers.Length; d++)
-                HarnessLog.Line($"[autostage-delays]   '{parts[i].Id}' decoupler active={decouplers[d].IsActive} " +
-                                $"enabled={decouplers[d].IsEnabled} " +
-                                $"connected={decouplers[d].Connector.Connection != null} " +
-                                $"template={parts[i].Template.Id}");
+            foreach (ISequenced module in parts[i].InSequence(seq.Number))
+            {
+                if (module is not Decoupler decoupler) continue;
+                HarnessLog.Line($"[autostage-delays]   '{parts[i].Id}' {SequencedModules.Describe(module)} " +
+                                $"active={decoupler.IsActive} enabled={decoupler.IsEnabled} " +
+                                $"connected={decoupler.Connector.Connection != null} " +
+                                $"delayKey={SequencedModules.DelayKey(module)}");
+            }
         }
     }
 
@@ -216,13 +218,18 @@ public sealed class DelayTest : IHarnessTest
         {
             if (seq.Activated || seq.Parts.IsEmpty)
                 continue;
+            // Per module: else a part whose motor belongs to a later row makes this one read
+            // as an engine row.
             bool hasEngine = false;
             bool hasDecoupler = false;
             ReadOnlySpan<Part> parts = seq.Parts;
             for (int i = 0; i < parts.Length; i++)
             {
-                hasEngine |= parts[i].HasAny<EngineController>();
-                hasDecoupler |= parts[i].HasAny<Decoupler>();
+                foreach (ISequenced module in parts[i].InSequence(seq.Number))
+                {
+                    hasEngine |= module is EngineController;
+                    hasDecoupler |= module is Decoupler;
+                }
             }
 
             if (!sawLaunchEngines)
@@ -243,19 +250,24 @@ public sealed class DelayTest : IHarnessTest
         return false;
     }
 
+    // Keyed the way the mod resolves a delay, so staging looks up the value set here.
     private static void ConfigureDelays(Vehicle vehicle, Sequence decouplerSeq, Sequence engineSeq)
     {
         Config.EngineDelays.Clear();
         Config.DecouplerDelays.Clear();
         foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
         {
+            if (seq != decouplerSeq && seq != engineSeq) continue;
             ReadOnlySpan<Part> parts = seq.Parts;
             for (int i = 0; i < parts.Length; i++)
             {
-                if (seq == decouplerSeq && parts[i].HasAny<Decoupler>())
-                    Config.DecouplerDelays[parts[i].Template.Id] = DecouplerDelayS;
-                if (seq == engineSeq && parts[i].HasAny<EngineController>())
-                    Config.EngineDelays[parts[i].Template.Id] = EngineDelayS;
+                foreach (ISequenced module in parts[i].InSequence(seq.Number))
+                {
+                    if (seq == decouplerSeq && module is Decoupler)
+                        Config.DecouplerDelays[SequencedModules.DelayKey(module)] = DecouplerDelayS;
+                    if (seq == engineSeq && module is EngineController)
+                        Config.EngineDelays[SequencedModules.DelayKey(module)] = EngineDelayS;
+                }
             }
         }
     }

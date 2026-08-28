@@ -12,7 +12,7 @@ public sealed class Mod
     private static Harmony? _harmony;
 
     // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.8.19.5261";
+    private const string TestedGameVersion = "v2026.8.22.5348";
 
     internal static bool AutoStageEnabled;
     internal static bool IgnitionDelayAvailable;
@@ -98,6 +98,9 @@ public sealed class Mod
     [StarMapUnload]
     public void Unload()
     {
+        // Before the patches come off. Reset below drops the pending slot
+        // unfired, stranding an already-activated row.
+        StagingDetector.FlushPendingForUnload();
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
         AutoStageEnabled = false;
